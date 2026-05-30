@@ -479,8 +479,12 @@ def _simulate_portfolio_once(weights, months, initial_capital, monthly_contribut
 
 def _normalize_weights(weights):
     total = sum(weights.values())
+    # If total is zero or negative, fall back to equal weighting for non-empty portfolios
     if total <= 0:
-        raise ValueError("포트폴리오 가중치 합계는 0보다 커야 합니다.")
+        if not weights:
+            raise ValueError("포트폴리오 가중치 합계는 0보다 커야 합니다.")
+        n = len(weights)
+        return {ticker: 1.0 / n for ticker in weights}
     return {ticker: w / total for ticker, w in weights.items()}
 
 
