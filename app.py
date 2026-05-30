@@ -47,111 +47,188 @@ ETF_DATA = {
 
 AI_PROFILE_CATEGORIES = ["성장형", "배당형", "금융형", "기술", "안정형"]
 
-AI_PROFILE_QUESTIONS = [
-    "1. ETF 투자 목표는 무엇인가요?",
-    "2. 투자 기간은 얼마나 되나요?",
-    "3. 손실이 발생하면 어떻게 하시겠습니까?",
-    "4. 배당 수익은 얼마나 중요한가요?",
-    "5. 특정 섹터 집중 투자를 원하시나요?",
-    "6. 레버리지 ETF를 포함할 때 위험 허용 수준은 어느 정도인가요?",
-    "7. 자산은 성장 중심, 균형형, 안정 중심 중 어디에 가깝습니까?",
-]
+# 점수 계산에 사용될 모든 카테고리 (레버리지 포함)
+ALL_SCORE_CATEGORIES = ["성장형", "배당형", "금융형", "기술", "안정형", "레버리지"]
 
-AI_PROFILE_CHOICES = [
-    ["단기 성장 중심", "배당 중심", "금융형 중심", "기술 집중"],
-    ["단기", "중기", "장기", "초장기"],
-    ["손실에도 추가 매수", "손실 시 보유", "손실 시 부분 매도", "손실 시 전량 매도"],
-    ["매우 중요", "중요", "보통", "덜 중요"],
-    ["기술/IT", "테크", "반도체", "섹터 분산"],
-    ["공격적으로 위험 감수", "보통 수준의 위험 감수", "중립적", "안정 지향"],
-    ["성장 중심", "균형형", "안정 중심", "매우 안정 중심"],
-]
-
-
-def get_adaptive_question(responses):
-    """응답에 따라 다음 질문을 결정합니다."""
-    index = len(responses)
-    if index >= len(AI_PROFILE_QUESTIONS):
-        return None
-
-    next_question = AI_PROFILE_QUESTIONS[index]
-    if index == 4 and any(keyword in responses[-1].lower() for keyword in ["기술", "테크", "반도체", "금융", "에너지", "소비"]):
-        return "5. 선택하신 섹터/자산 비중 중 기대 수익률과 위험 허용 범위는 어느 정도인가요?"
-    return next_question
-
-
-def build_claude_prompt(responses):
-    """Claude에게 보낼 프롬프트를 만듭니다."""
-    response_lines = "\n".join(f"Q{i+1}: {answer}" for i, answer in enumerate(responses))
-    return (
-        "다음 고객 응답을 바탕으로 5개 자산 비율을 계산해 주세요. "
-        "각 카테고리별 비율 합이 100%가 되도록 작성해 주세요. "
-        "응답 성향에 따라 성장형, 배당형, 금융형, 기술, 안정형을 고려해 주세요.\n\n"
-        f"{response_lines}\n\n"
-        "응답은 반드시 JSON 형식으로 아래와 같이 출력해 주세요:\n"
-        "{\n"
-        "  \"성장형\": 0,\n"
-        "  \"배당형\": 0,\n"
-        "  \"금융형\": 0,\n"
-        "  \"기술\": 0,\n"
-        "  \"안정형\": 0\n"
-        "}\n"
-        "추가 설명은 생략해 주세요."
-    )
-
-
-def parse_claude_profile_response(raw_text):
-    """Claude 응답에서 JSON을 추출합니다."""
-    json_text = None
-    match = re.search(r"\{[\s\S]*?\}", raw_text)
-    if match:
-        json_text = match.group(0)
-
-    if not json_text:
-        raise ValueError("Claude 응답에서 JSON을 찾을 수 없습니다.")
-
-    try:
-        profile = {
-            "성장형": 0.0,
-            "배당형": 0.0,
-            "금융형": 0.0,
-            "기술": 0.0,
-            "안정형": 0.0,
+# 새로운 질문 구조: 조건부 질문 지원
+AI_PROFILE_QUESTIONS = {
+    "Q1": {
+        "text": "1단계: 투자 기본 환경\n\n**Q1. 이번에 굴리실 투자 자금의 주된 목적과 목표 기간은 어떻게 되시나요?**",
+        "choices": [
+            "① 1~3년 내에 써야 하는 전세금 / 결혼 자금 (단기)",
+            "② 5~10년 뒤 집 장만을 위한 목돈 마련 (중기)",
+            "③ 15년 이상 장기 노후 자금 준비 (장기)"
+        ],
+        "scores": [
+            {"안정형": 3},
+            {"배당형": 2, "성장형": 1},
+            {"성장형": 3, "레버리지": 1}
+        ]
+    },
+    "Q2": {
+        "text": "**Q2. 매달 추가로 저축(적립식 투자)을 하실 여력이 있으신가요?**",
+        "choices": [
+            "① 매달 일정 금액을 꾸준히 저축할 수 있습니다.",
+            "② 지금 가진 목돈을 한 번에 묻어두고 싶습니다."
+        ],
+        "scores": [
+            {"성장형": 1},
+            {}
+        ]
+    },
+    "Q3": {
+        "text": "2단계: 수익 보상 선호도\n\n**Q3. 투자로 얻는 이익 중 어떤 형태를 더 선호하시나요?**",
+        "choices": [
+            "① 월별로 꾸준히 나오는 배당/금리 수익 (현금흐름)",
+            "② 매달 나오진 않지만 기업이 성장하면서 주가가 크게 오르는 것",
+            "③ 주가 성장도 적당히 하면서, 매년 배당금도 늘려주는 것"
+        ],
+        "scores": [
+            {"배당형": 2, "금융형": 2},
+            {"성장형": 3},
+            {"배당형": 2, "성장형": 1}
+        ]
+    },
+    "Q4": {
+        "text": "3단계: 위험 감수 성향 (가장 중요)\n\n**Q4. 만약 내가 1,000만 원을 투자했는데, 세계 경제 위기로 한 달 만에 30% 손실이 난다면 심정이 어떠실 것 같나요?**",
+        "choices": [
+            "① 정신이 번쩍 든다. 손실이 두렵고 안정자산으로 옮기고 싶다.",
+            "② 속은 쓰리지만 시장은 우상향할 거니 꾹 참고 버틴다.",
+            "③ 어차피 장기 투자다. 바겐세일 기간이니 돈을 더 끌어와서 추가 매수한다."
+        ],
+        "scores": [
+            {"안정형": 4},
+            {"성장형": 2, "배당형": 1},
+            {"성장형": 3, "레버리지": 2}
+        ],
+        "follow_up": {
+            3: "Q5"  # Q4에서 ③번 선택 시 Q5로 이동
         }
-        cleaned = json_text.replace("\n", " ").replace("\r", " ")
-        for category in profile:
-            pattern = rf'"{category}"\s*:\s*([0-9]+(?:\.[0-9]+)?)'
-            found = re.search(pattern, cleaned)
-            if found:
-                profile[category] = float(found.group(1))
-        total = sum(profile.values())
-        if total == 0:
-            raise ValueError("Claude가 0 비율 응답을 반환했습니다.")
-        return {k: round((v / total) * 100, 2) for k, v in profile.items()}
-    except Exception as exc:
-        raise ValueError(f"Claude 응답 파싱 오류: {exc}") from exc
+    },
+    "Q5": {
+        "text": "**Q5. (심화 질문) 시장이 내 예상과 반대로 갈 때 3배 빠르게 자산이 녹아내리는 극단적인 변동성(레버리지)도 감당할 준비가 되셨나요?**",
+        "choices": [
+            "① 아, 3배는 너무 무섭네요. 일반 지수 추종이 좋겠습니다.",
+            "② 하이 리스크 하이 리턴! 화끈하게 감수하겠습니다."
+        ],
+        "scores": [
+            {"성장형": 1},
+            {"레버리지": 3, "성장형": 1}
+        ],
+        "condition": "previous_q4_choice == 2"
+    },
+    "Q6": {
+        "text": "4단계: 관심 분야\n\n**Q6. 투자 시 특정 산업을 선택할 때, 어떤 방식을 선호하시나요?**",
+        "choices": [
+            "① 미국 전체 시장(대기업 500개~전체)에 분산 투자하고 싶다.",
+            "② AI, 반도체, IT 기술 기업들의 미래를 강력하게 믿는다.",
+            "③ 고령화 시대에 헬스케어/바이오/의약품 분야가 유망하다고 본다."
+        ],
+        "scores": [
+            {"성장형": 1},
+            {"기술": 3, "성장형": 1},
+            {"안정형": 2, "기술": 1}
+        ]
+    },
+    "Q7": {
+        "text": "5단계: 배당/금융형 선호도\n\n**Q7. 배당 수익이 중요하다면, 어떤 방식을 원하시나요?**",
+        "choices": [
+            "① 매년 1-2회 정도 정해진 시기에 받는 배당금 (연 배당)",
+            "② 예측 불가능하지만 자주 받는 배당/수익 (월 배당)",
+            "③ 잘 모르겠는데, 배당이 중요하지는 않습니다."
+        ],
+        "scores": [
+            {"배당형": 3},
+            {"금융형": 3, "배당형": 1},
+            {}
+        ]
+    },
+    "Q8": {
+        "text": "6단계: 기술/반도체 집중도\n\n**Q8. 기술 섹터 내에서 어떤 전략을 선호하시나요?**",
+        "choices": [
+            "① 기술/IT 전체에 분산 투자 (Apple, NVIDIA, Google, Microsoft 등 다양)",
+            "② 반도체 기업 집중 (NVIDIA, TSMC, Intel, Broadcom 등)",
+            "③ 반도체에 매우 집중 + 3배 레버리지 추구"
+        ],
+        "scores": [
+            {"기술": 2},
+            {"기술": 3},
+            {"기술": 3, "레버리지": 2}
+        ]
+    }
+}
+
+# 질문 순서 (조건부 질문 제외)
+AI_PROFILE_BASE_QUESTIONS = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]
 
 
-def analyze_investor_profile_claude(responses, api_key=None):
-    """Claude API를 호출해 투자 성향 비율을 계산합니다."""
-    if len(responses) != len(AI_PROFILE_QUESTIONS):
-        raise ValueError(f"응답은 {len(AI_PROFILE_QUESTIONS)}개여야 합니다. 현재: {len(responses)}")
+def get_next_question(current_q, responses):
+    """현재 질문 다음에 표시할 질문을 결정합니다."""
+    # Q5 다음은 항상 Q6
+    if current_q == "Q5":
+        return "Q6"
+    
+    # Q4 → Q5로의 조건부 분기
+    if current_q == "Q4" and responses.get("Q4") == 2:  # Q4에서 ③번(인덱스 2) 선택
+        return "Q5"
+    
+    # Q4에서 ③번이 아니면 Q6으로
+    if current_q == "Q4" and responses.get("Q4") != 2:
+        return "Q6"
+    
+    # 기본 순서로 진행
+    base_order = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]  # Q5는 조건부
+    try:
+        current_idx = base_order.index(current_q)
+        if current_idx + 1 < len(base_order):
+            return base_order[current_idx + 1]
+    except ValueError:
+        pass
+    
+    return None
 
-    api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY 환경 변수가 필요합니다.")
 
-    client = anthropic.Client(api_key=api_key)
-    prompt = build_claude_prompt(responses)
-    completion = client.completions.create(
-        model="claude-3.5-mini",
-        prompt=anthropic.HUMAN_PROMPT + prompt + anthropic.AI_PROMPT,
-        max_tokens_to_sample=300,
-        temperature=0.0,
-    )
+def calculate_profile_scores(responses):
+    """사용자 응답을 기반으로 카테고리별 점수를 계산합니다."""
+    scores = {cat: 0 for cat in AI_PROFILE_CATEGORIES}
+    leverage_score = 0  # 레버리지 점수 별도 추적
+    
+    for q_key, choice_idx in responses.items():
+        if q_key not in AI_PROFILE_QUESTIONS:
+            continue
+        
+        q_data = AI_PROFILE_QUESTIONS[q_key]
+        if choice_idx is None or choice_idx >= len(q_data["scores"]):
+            continue
+            
+        choice_scores = q_data["scores"][choice_idx]
+        for category, points in choice_scores.items():
+            # 레버리지 점수는 별도로 추적
+            if category == "레버리지":
+                leverage_score += points
+            elif category in scores:
+                scores[category] += points
+    
+    # 정규화 (합계 100%)
+    total = sum(scores.values())
+    if total == 0:
+        profile = {cat: 100 / len(AI_PROFILE_CATEGORIES) for cat in AI_PROFILE_CATEGORIES}
+    else:
+        profile = {cat: round((scores[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
+    
+    # 레버리지 점수를 별도 필드로 저장 (성장형에 영향)
+    profile["_leverage_score"] = leverage_score
+    
+    return profile
 
-    raw_output = completion.get("completion", "")
-    return parse_claude_profile_response(raw_output)
+
+def get_question_text_and_choices(q_key):
+    """질문 키에 해당하는 텍스트와 선택지를 반환합니다."""
+    if q_key not in AI_PROFILE_QUESTIONS:
+        return None, None
+    
+    q_data = AI_PROFILE_QUESTIONS[q_key]
+    return q_data["text"], q_data["choices"]
 
 # ============================================================
 # 섹션 3. ETF 추천 함수
@@ -167,49 +244,162 @@ ETF_CATEGORY_MAP = {
 }
 
 CATEGORY_TO_ETFS = {
-    "성장형": ["VOO", "QQQ", "VTI", "VGT", "SSO", "UPRO"],
+    "성장형": ["VOO", "QQQ", "VTI"],  # 지수추적만
     "배당형": ["SCHD", "DGRO", "VYM"],
     "금융형": ["JEPI", "JEPQ", "QYLD"],
-    "기술": ["VGT", "SOXX", "SMH", "DRAM", "XLV"],
-    "안정형": ["SGOV"],
+    "기술": ["VGT", "SOXX", "SMH", "DRAM"],
+    "안정형": ["SGOV", "XLV"],
+    "레버리지": ["TQQQ", "UPRO", "SOXL", "QLD", "SSO"],
 }
 
 
 def _normalize_profile_weights(profile_weights):
-    total = sum(profile_weights.get(cat, 0) for cat in AI_PROFILE_CATEGORIES)
+    """레버리지 점수를 제외한 카테고리만 정규화합니다."""
+    regular_weights = {cat: profile_weights.get(cat, 0) for cat in AI_PROFILE_CATEGORIES}
+    total = sum(regular_weights.values())
     if total <= 0:
         raise ValueError("프로필 가중치 합계는 0보다 커야 합니다.")
-    return {cat: profile_weights.get(cat, 0) / total for cat in AI_PROFILE_CATEGORIES}
+    return {cat: regular_weights[cat] / total for cat in AI_PROFILE_CATEGORIES}
+
+
+def recommend_etfs_with_weights(profile_weights, top_n=5):
+    """투자 성향 비율을 받아 ETF와 비중을 함께 추천합니다.
+    
+    반환: {ticker: weight} 딕셔너리
+    """
+    normalized = _normalize_profile_weights(profile_weights)
+    leverage_score = profile_weights.get("_leverage_score", 0)
+    
+    # 레버리지 점수를 성장형에 통합하여 비중 계산 (0~1 사이 정규화)
+    # 예: 레버리지 0.3은 성장형의 30% 가중치로 추가
+    growth_with_leverage = normalized["성장형"] + (leverage_score * normalized["성장형"])
+    
+    selected = []
+    
+    # 각 카테고리의 할당 개수 계산 (점수에 비례)
+    # 성장형 비중이 높으면 레버리지 선택 가능성도 높아짐
+    category_counts = {}
+    for category in AI_PROFILE_CATEGORIES:
+        if category == "성장형":
+            allocation = int(round(growth_with_leverage * top_n))
+        else:
+            allocation = int(round(normalized[category] * top_n))
+        category_counts[category] = max(0, allocation)
+    
+    # 반올림으로 인해 합계가 top_n과 안 맞을 수 있으니 조정
+    total_allocated = sum(category_counts.values())
+    if total_allocated < top_n:
+        # 가장 높은 스코어의 카테고리에 추가
+        top_category = "성장형" if growth_with_leverage >= normalized["성장형"] else max(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c])
+        category_counts[top_category] += top_n - total_allocated
+    elif total_allocated > top_n:
+        # 가장 낮은 스코어의 카테고리에서 제거
+        lowest_category = min(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c])
+        category_counts[lowest_category] = max(0, category_counts[lowest_category] - (total_allocated - top_n))
+    
+    # 카테고리별로 정렬 (높은 점수 순)
+    sorted_categories = sorted(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c], reverse=True)
+    
+    # ETF 선택 + 비중 저장
+    etf_to_category = {}  # ticker -> category 매핑
+    etf_to_weight_category = {}  # ticker -> 비중 계산용 카테고리 (레버리지용 별도 처리)
+    
+    # 성장형에서 레버리지 선택 개수 결정
+    growth_allocation = category_counts["성장형"]
+    leverage_count = 0
+    if leverage_score > 0 and growth_allocation > 0:
+        # 레버리지 스코어 비율에 따라 일부를 레버리지 ETF로 대체
+        leverage_ratio = leverage_score / (normalized["성장형"] + leverage_score)
+        leverage_count = max(1, int(round(growth_allocation * leverage_ratio)))
+    
+    # 각 카테고리에서 필요한 개수만큼 ETF 선택
+    for category in sorted_categories:
+        needed = category_counts[category]
+        if needed <= 0:
+            continue
+        
+        # 성장형이면서 레버리지 할당이 있는 경우
+        if category == "성장형" and leverage_count > 0:
+            # 일부는 레버리지에서, 일부는 성장형에서 선택
+            leverage_etfs = CATEGORY_TO_ETFS.get("레버리지", [])[:leverage_count]
+            growth_etfs = CATEGORY_TO_ETFS.get(category, [])[leverage_count:leverage_count + (needed - leverage_count)]
+            
+            for ticker in leverage_etfs:
+                if ticker not in selected and len(selected) < top_n:
+                    selected.append(ticker)
+                    etf_to_category[ticker] = "성장형"
+                    etf_to_weight_category[ticker] = "레버리지"  # 비중 계산용
+            
+            for ticker in growth_etfs:
+                if ticker not in selected and len(selected) < top_n:
+                    selected.append(ticker)
+                    etf_to_category[ticker] = "성장형"
+                    etf_to_weight_category[ticker] = "성장형"
+        else:
+            etf_list = CATEGORY_TO_ETFS.get(category, [])[:needed]
+            for ticker in etf_list:
+                if ticker not in selected and len(selected) < top_n:
+                    selected.append(ticker)
+                    etf_to_category[ticker] = category
+                    etf_to_weight_category[ticker] = category
+    
+    # 부족한 경우 더 추가
+    if len(selected) < top_n:
+        all_etfs = []
+        for cat_etfs in CATEGORY_TO_ETFS.values():
+            all_etfs.extend(cat_etfs)
+        
+        for ticker in all_etfs:
+            if ticker not in selected and len(selected) < top_n:
+                selected.append(ticker)
+                etf_category = etf_to_category.get(ticker, ETF_CATEGORY_MAP.get(ETF_DATA[ticker]["카테고리"], "성장형"))
+                etf_to_category[ticker] = etf_category
+                etf_to_weight_category[ticker] = etf_category
+    
+    # 비중 계산: 카테고리별 점수에 따라 분배
+    # 레버리지는 성장형 비중의 일부로 계산
+    weights = {}
+    
+    # 레버리지 ETF와 일반 성장형 ETF를 구분해서 비중 계산
+    leverage_etfs = [t for t in selected if etf_to_weight_category.get(t) == "레버리지"]
+    growth_etfs = [t for t in selected if etf_to_weight_category.get(t) == "성장형"]
+    
+    # 성장형 비중을 레버리지와 성장형으로 분배
+    if leverage_etfs and growth_etfs:
+        leverage_ratio = leverage_score / (normalized["성장형"] + leverage_score)
+        growth_allocation_weight = normalized["성장형"] * (1 - leverage_ratio)
+        leverage_allocation_weight = normalized["성장형"] * leverage_ratio
+    else:
+        growth_allocation_weight = normalized["성장형"]
+        leverage_allocation_weight = 0
+    
+    for ticker in selected:
+        weight_category = etf_to_weight_category.get(ticker, etf_to_category.get(ticker, "성장형"))
+        
+        if weight_category == "레버리지":
+            category_weight = leverage_allocation_weight
+            same_category_etfs = leverage_etfs
+        elif weight_category == "성장형":
+            category_weight = growth_allocation_weight
+            same_category_etfs = growth_etfs
+        else:
+            category_weight = normalized.get(weight_category, 0)
+            same_category_etfs = [t for t in selected if etf_to_weight_category.get(t) == weight_category]
+        
+        weights[ticker] = category_weight / len(same_category_etfs) if same_category_etfs else 1 / len(selected)
+    
+    # 정규화
+    total_weight = sum(weights.values())
+    if total_weight > 0:
+        weights = {ticker: round(w / total_weight, 4) for ticker, w in weights.items()}
+    
+    return dict(sorted(weights.items(), key=lambda x: x[1], reverse=True))
 
 
 def recommend_etfs(profile_weights, top_n=5):
     """투자 성향 비율을 받아 ETF를 추천합니다."""
-    normalized = _normalize_profile_weights(profile_weights)
-    selected = []
-
-    for category in sorted(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c], reverse=True):
-        if normalized[category] <= 0:
-            continue
-        for ticker in CATEGORY_TO_ETFS.get(category, []):
-            if ticker not in selected:
-                selected.append(ticker)
-                break
-        if len(selected) >= top_n:
-            break
-
-    if len(selected) < top_n:
-        remaining = [ticker for ticker in ETF_DATA.keys() if ticker not in selected]
-        scored = sorted(
-            remaining,
-            key=lambda t: normalized.get(ETF_CATEGORY_MAP.get(ETF_DATA[t]["카테고리"], "성장형"), 0),
-            reverse=True,
-        )
-        for ticker in scored:
-            if len(selected) >= top_n:
-                break
-            selected.append(ticker)
-
-    return selected[:top_n]
+    weights = recommend_etfs_with_weights(profile_weights, top_n)
+    return list(weights.keys())[:top_n]
 
 
 def detect_sector_overlap(selected_etfs):
@@ -604,29 +794,23 @@ ANALYSIS_MODES = ["목표 금액 달성", "목표 기간 확인"]
 
 
 def estimate_profile_locally(responses):
-    score = {cat: 0 for cat in AI_PROFILE_CATEGORIES}
-    for answer in responses:
-        text = answer.lower()
-        if any(token in text for token in ["성장", "테크", "기술", "qqq", "vti", "upro", "tqqq"]):
-            score["성장형"] += 2
-        if any(token in text for token in ["배당", "dividend", "schd", "dgro", "vym"]):
-            score["배당형"] += 2
-        if any(token in text for token in ["금융", "jepi", "jepq", "qyld"]):
-            score["금융형"] += 2
-        if any(token in text for token in ["기술", "semiconductor", "테크", "반도체"]):
-            score["기술"] += 2
-        if any(token in text for token in ["안정", "채권", "low risk", "stable", "sgov"]):
-            score["안정형"] += 2
-    total = sum(score.values())
-    if total == 0:
-        score = {cat: 1 for cat in AI_PROFILE_CATEGORIES}
-        total = len(score)
-    return {cat: round(score[cat] / total * 100, 2) for cat in AI_PROFILE_CATEGORIES}
+    """사용자 응답을 기반으로 투자 성향을 로컬에서 계산합니다."""
+    return calculate_profile_scores(responses)
 
 
-def build_portfolio_weights(etfs):
+def build_portfolio_weights(etfs, etf_weights=None):
+    """포트폴리오 비중을 계산합니다.
+    
+    etf_weights가 제공되면 그 값을 사용하고, 없으면 균등 분배합니다.
+    """
     if not etfs:
         raise ValueError("추천 ETF 목록이 비어 있습니다.")
+    
+    # etf_weights가 있으면 사용
+    if etf_weights:
+        return {ticker: etf_weights.get(ticker, 1/len(etfs)) for ticker in etfs}
+    
+    # 없으면 균등 분배
     weight = 1.0 / len(etfs)
     return {ticker: weight for ticker in etfs}
 
@@ -757,8 +941,8 @@ def run_streamlit_app():
 
     if "app_step" not in st.session_state:
         st.session_state["app_step"] = 1
-        st.session_state["profile_step"] = 0
-        st.session_state["profile_answers"] = [None] * len(AI_PROFILE_QUESTIONS)
+        st.session_state["current_question"] = "Q1"
+        st.session_state["profile_responses"] = {}  # {Q_KEY: choice_index}
         st.session_state["profile_submitted"] = False
         st.session_state["profile_weights"] = None
         st.session_state["selected_etfs"] = []
@@ -803,32 +987,100 @@ def run_streamlit_app():
 
     if current_step == 1:
         st.write("간단한 질문에 답해 투자 성향을 분석합니다.")
-        profile_step = st.session_state["profile_step"]
-        st.write(f"**질문 {profile_step + 1} / {len(AI_PROFILE_QUESTIONS)}**")
-        st.write(AI_PROFILE_QUESTIONS[profile_step])
-        selected_choice = st.radio(
-            "보기 선택", AI_PROFILE_CHOICES[profile_step], key=f"choice_{profile_step}"
-        )
-        cols = st.columns([1, 1, 1])
-        if cols[0].button("이전", disabled=profile_step == 0, key="q_prev"):
-            st.session_state["profile_step"] = profile_step - 1
-            st.rerun()
-        if cols[2].button("다음", key="q_next"):
-            st.session_state["profile_answers"][profile_step] = selected_choice
-            if profile_step + 1 < len(AI_PROFILE_QUESTIONS):
-                st.session_state["profile_step"] = profile_step + 1
-                st.rerun()
-            else:
-                responses = st.session_state["profile_answers"]
-                try:
-                    profile_weights = analyze_investor_profile_claude(responses)
-                except Exception as exc:
-                    st.warning(f"Claude API 호출 실패: {exc}. 로컬 추정 알고리즘으로 대체합니다.")
-                    profile_weights = estimate_profile_locally(responses)
-                st.session_state["profile_weights"] = profile_weights
-                st.session_state["profile_submitted"] = True
+        
+        current_q = st.session_state.get("current_question", "Q1")
+        responses = st.session_state.get("profile_responses", {})
+        
+        # 현재 질문 텍스트와 선택지 가져오기
+        q_text, q_choices = get_question_text_and_choices(current_q)
+        
+        if q_text is None:
+            # 모든 질문 완료
+            st.success("✅ 모든 질문을 완료했습니다!")
+            profile_weights = calculate_profile_scores(responses)
+            st.session_state["profile_weights"] = profile_weights
+            st.session_state["profile_submitted"] = True
+            
+            # 분석 결과 표시
+            st.write("### 투자 성향 분석 결과")
+            cols = st.columns(5)
+            for i, (cat, pct) in enumerate(profile_weights.items()):
+                with cols[i]:
+                    st.metric(cat, f"{pct}%")
+            
+            if st.button("STEP2로 이동", key="proceed_to_step2"):
                 st.session_state["app_step"] = 2
                 st.rerun()
+        else:
+            # 질문 표시
+            st.write(q_text)
+            
+            # 진행 상황 계산 (정확하게)
+            # 현재까지 응답한 질문 개수
+            completed = len(responses)
+            
+            # 전체 질문 개수 결정
+            if "Q5" in AI_PROFILE_QUESTIONS and responses.get("Q4") == 2:
+                # Q5가 포함될 경우
+                total_questions = len(AI_PROFILE_BASE_QUESTIONS) + 1
+            else:
+                # Q5가 미포함될 경우
+                total_questions = len(AI_PROFILE_BASE_QUESTIONS)
+            
+            st.write(f"진행 상황: {completed}/{total_questions}")
+            
+            # 선택지 표시 (라디오 버튼)
+            selected_idx = st.radio(
+                "선택지",
+                range(len(q_choices)),
+                format_func=lambda i: q_choices[i],
+                key=f"choice_{current_q}"
+            )
+            
+            # 이전/다음 버튼
+            cols = st.columns([1, 1, 1])
+            
+            # 이전 버튼
+            with cols[0]:
+                if st.button("이전", key="q_prev"):
+                    # 현재 질문의 응답 삭제 (뒤로 갔을 때 진행상황 업데이트)
+                    if current_q in st.session_state["profile_responses"]:
+                        del st.session_state["profile_responses"][current_q]
+                    
+                    # 현재 질문 이전으로 돌아가기
+                    all_questions = AI_PROFILE_BASE_QUESTIONS.copy()
+                    # Q5가 응답에 있으면 포함
+                    if "Q5" in st.session_state["profile_responses"]:
+                        all_questions.insert(all_questions.index("Q6"), "Q5")
+                    
+                    try:
+                        current_idx = all_questions.index(current_q)
+                        if current_idx > 0:
+                            prev_q = all_questions[current_idx - 1]
+                            st.session_state["current_question"] = prev_q
+                            st.rerun()
+                    except ValueError:
+                        pass
+            
+            # 다음 버튼
+            with cols[2]:
+                if st.button("다음", key="q_next"):
+                    # 현재 선택지 저장
+                    st.session_state["profile_responses"][current_q] = selected_idx
+                    
+                    # 다음 질문 결정
+                    next_q = get_next_question(current_q, st.session_state["profile_responses"])
+                    
+                    if next_q is None:
+                        # 모든 질문 완료 - 프로필 계산
+                        profile_weights = calculate_profile_scores(st.session_state["profile_responses"])
+                        st.session_state["profile_weights"] = profile_weights
+                        st.session_state["profile_submitted"] = True
+                        st.session_state["app_step"] = 2
+                        st.rerun()
+                    else:
+                        st.session_state["current_question"] = next_q
+                        st.rerun()
 
     elif current_step == 2:
         if not profile_weights:
@@ -839,40 +1091,97 @@ def run_streamlit_app():
 
         if not selected_etfs:
             selected_etfs = recommend_etfs(profile_weights, top_n=5)
+            # 비중 계산
+            etf_weights = recommend_etfs_with_weights(profile_weights, top_n=5)
+            st.session_state["etf_weights"] = etf_weights
             st.session_state["selected_etfs"] = selected_etfs
             st.session_state["overlap_info"] = detect_sector_overlap(selected_etfs)
             overlap_info = st.session_state["overlap_info"]
-
-        st.write("추천 ETF 목록")
-        card_rows = [selected_etfs[i:i + 3] for i in range(0, len(selected_etfs), 3)]
-        for row in card_rows:
-            cols = st.columns(len(row))
-            for col, ticker in zip(cols, row):
-                info = ETF_DATA[ticker]
-                fee_text = f"{info['보수율'] * 100:.2f}%"
-                dividend_text = "배당 있음" if info["배당"] else "배당 없음"
-                leverage_text = "레버리지 ETF" if info["레버리지"] else "일반 ETF"
-                category_label = info["카테고리"]
-                summary_text = {
-                    "지수추적": "시장 전체를 추적하는 안정적 성장형 ETF입니다.",
-                    "배당형": "배당 수익과 안정성을 동시에 기대할 수 있는 ETF입니다.",
-                    "금융형": "금융 섹터 배당과 변동성 완화를 목표로 합니다.",
-                    "기술": "기술 섹터 집중 투자를 통해 성장 기회를 노립니다.",
-                    "안정형": "저변동성 안정 자산으로 포트폴리오를 보완합니다.",
-                    "레버리지": "단기 성장 기회를 노리고 변동성에 대비하는 전략에 적합합니다.",
-                }.get(category_label, "균형 있는 포트폴리오 구성을 위해 추천된 ETF입니다.")
-                with col:
-                    st.markdown(
-                        f"**{ticker} · {info['이름']}**  \
-                        카테고리: {category_label}  \
-                        보수율: {fee_text}  \
-                        {dividend_text} · {leverage_text}  \
-                        \n"
-                        f"{summary_text}"
-                    )
-                    st.markdown("---")
+        else:
+            etf_weights = st.session_state.get("etf_weights", {})
+        
+        # 투자 성향 분석 결과 표시
+        st.write("### 📊 당신의 투자 성향")
+        visible_categories = [cat for cat in profile_weights if cat != "_leverage_score"]
+        cols = st.columns(len(visible_categories))
+        for i, cat in enumerate(visible_categories):
+            pct = profile_weights[cat]
+            with cols[i]:
+                st.metric(cat, f"{pct}%")
+        
+        st.markdown("---")
+        
+        st.write("### 🎯 추천 포트폴리오 (5개 ETF)")
+        st.write(f"아래는 당신의 투자 성향에 맞게 선별된 ETF들입니다. 각 ETF의 비중은 당신의 성향 점수에 따라 자동으로 배분되었습니다.")
+        
+        # 포트폴리오 테이블
+        portfolio_data = []
+        for idx, ticker in enumerate(selected_etfs, 1):
+            info = ETF_DATA.get(ticker, {})
+            weight = etf_weights.get(ticker, 1/len(selected_etfs))
+            weight_pct = round(weight * 100, 1)
+            
+            portfolio_data.append({
+                "순위": idx,
+                "ETF": ticker,
+                "이름": info.get("이름", ""),
+                "카테고리": info.get("카테고리", ""),
+                "비중": f"{weight_pct}%"
+            })
+        
+        portfolio_df = pd.DataFrame(portfolio_data)
+        st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        
+        # 각 ETF 상세 설명
+        st.write("### 📋 ETF 상세 정보")
+        
+        for ticker in selected_etfs:
+            info = ETF_DATA.get(ticker, {})
+            weight = etf_weights.get(ticker, 1/len(selected_etfs))
+            weight_pct = round(weight * 100, 1)
+            
+            with st.expander(f"**{ticker}** - {info.get('이름', '')} ({weight_pct}%)"):
+                col1, col2 = st.columns([1, 1])
+                
+                with col1:
+                    st.write("**기본 정보**")
+                    st.write(f"• **카테고리**: {info.get('카테고리', '')}")
+                    st.write(f"• **보수율**: {info.get('보수율', 0)*100:.2f}%")
+                    st.write(f"• **배당**: {'있음 💰' if info.get('배당') else '없음'}")
+                    st.write(f"• **레버리지**: {'3배 🚀' if info.get('레버리지') else '없음'}")
+                
+                with col2:
+                    st.write("**설명**")
+                    descriptions = {
+                        "VOO": "S&P 500 (미국 500대 기업)\n안정적 성장형의 대표",
+                        "QQQ": "나스닥 100 (미국 기술기업)\n기술주 중심 성장형",
+                        "VTI": "미국 전체 주식시장\n최대 분산의 지수 추적",
+                        "SCHD": "배당성장 ETF\n안정적 배당 수익",
+                        "DGRO": "배당성장 ETF\n매년 배당금 증가",
+                        "VYM": "고배당 수익 ETF\n높은 배당 수익률",
+                        "JEPI": "월배당 프리미엄 인컴 ETF\n매월 배당금 수령",
+                        "JEPQ": "나스닥 월배당 ETF\n기술주 + 월배당",
+                        "QYLD": "나스닥 월배당 커버드콜\n높은 월 배당 수익",
+                        "QLD": "나스닥 2배 레버리지\n2배 수익/손실",
+                        "TQQQ": "나스닥 3배 레버리지\n3배 수익/손실 (위험 높음)",
+                        "SSO": "S&P500 2배 레버리지\n2배 수익/손실",
+                        "UPRO": "S&P500 3배 레버리지\n3배 수익/손실 (위험 높음)",
+                        "SOXL": "반도체 3배 레버리지\n반도체 + 3배 수익/손실 (최고 위험)",
+                        "VGT": "기술섹터 종합 ETF\n다양한 IT기업 투자",
+                        "SOXX": "반도체 전문 ETF\nNVIDIA, TSMC 등",
+                        "SMH": "반도체 전문 ETF\nIntel, Broadcom 등",
+                        "DRAM": "반도체 메모리 전문\nDRAM, NAND 기업",
+                        "XLV": "헬스케어 섹터 ETF\n의약품, 의료기기 기업",
+                        "SGOV": "초단기 미국채 ETF\n극도로 안전한 자산"
+                    }
+                    st.write(descriptions.get(ticker, ""))
+        
+        st.markdown("---")
+        
         if overlap_info:
-            st.warning("섹터/카테고리가 중복되는 ETF가 있습니다. 대체 ETF를 확인해보세요.")
+            st.warning("⚠️ 섹터/카테고리가 중복되는 ETF가 있습니다. 대체 ETF를 확인해보세요.")
             overlap_df = pd.DataFrame([
                 {
                     "중복카테고리": item["중복카테고리"],
@@ -882,6 +1191,7 @@ def run_streamlit_app():
                 for item in overlap_info
             ])
             st.dataframe(overlap_df, use_container_width=True)
+        
         step_button_row()
 
     elif current_step == 5:
@@ -900,7 +1210,8 @@ def run_streamlit_app():
         st.write("### 시뮬레이션 실행")
         st.write("선택한 모드에 따라 입력창이 표시됩니다. 입력 후 '시뮬레이션 실행'을 클릭하세요.")
 
-        port_weights = build_portfolio_weights(selected_etfs)
+        etf_weights = st.session_state.get("etf_weights", {})
+        port_weights = build_portfolio_weights(selected_etfs, etf_weights)
 
         sim_container = st.container()
         if st.session_state.get("analysis_mode") == "목표 금액 달성":
@@ -997,9 +1308,10 @@ def run_streamlit_app():
         st.write("### 매수 전략 추천")
         st.write("선택된 ETF 및 투자 성향 기반으로 DCA/일시투자(LOC)/리밸런싱 주기와 추천 이유를 제시합니다.")
 
-        # 포트폴리오 가중치(단순 균등)
+        # 포트폴리오 가중치 (점수에 따른 비중 적용)
+        etf_weights = st.session_state.get("etf_weights", {})
         try:
-            portfolio_weights = build_portfolio_weights(selected_etfs)
+            portfolio_weights = build_portfolio_weights(selected_etfs, etf_weights)
         except Exception:
             portfolio_weights = {t: 1.0 / max(1, len(selected_etfs)) for t in selected_etfs}
 
