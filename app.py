@@ -402,6 +402,86 @@ def recommend_etfs(profile_weights, top_n=5):
     return list(weights.keys())[:top_n]
 
 
+def _get_etf_annual_return(ticker):
+    """ETF 예상 연 수익률을 계산합니다."""
+    mu, _ = _get_ticker_return_profile(ticker)
+    return max(0, mu * 100)  # 음수 제거
+
+
+def _get_risk_stars(ticker):
+    """ETF 위험도를 별점(0~5)로 반환합니다."""
+    _, sigma = _get_ticker_return_profile(ticker)
+    # 변동성 범위: 0.05 (1별) ~ 0.25 (5별)
+    if sigma < 0.07:
+        return 1
+    elif sigma < 0.12:
+        return 2
+    elif sigma < 0.15:
+        return 3
+    elif sigma < 0.20:
+        return 4
+    else:
+        return 5
+
+
+def _display_etf_card_clickable(ticker, is_selected=False):
+    """클릭 가능한 ETF 카드를 반환합니다 (HTML 없이 순수 Streamlit 사용)."""
+    info = ETF_DATA.get(ticker, {})
+    annual_return = _get_etf_annual_return(ticker)
+    risk_stars = _get_risk_stars(ticker)
+    
+    descriptions = {
+        "VOO": "S&P 500 종합 지수", "QQQ": "나스닥 100 기술주", "VTI": "미국 전체 주식시장",
+        "SCHD": "배당성장형", "DGRO": "배당성장형", "VYM": "고배당 수익형",
+        "JEPI": "월배당 프리미엄", "JEPQ": "나스닥 월배당", "QYLD": "나스닥 고수익",
+        "QLD": "나스닥 2배 레버리지", "TQQQ": "나스닥 3배 레버리지",
+        "SSO": "S&P500 2배 레버리지", "UPRO": "S&P500 3배 레버리지", "SOXL": "반도체 3배 레버리지",
+        "VGT": "기술섹터 종합", "SOXX": "반도체 전문", "SMH": "반도체 전문",
+        "DRAM": "반도체 메모리", "XLV": "헬스케어 섹터", "SGOV": "초단기 미국채"
+    }
+    
+    # 카드 스타일 설정 (선택 여부에 따라)
+    border_color = "#FF6B6B" if is_selected else "#CCCCCC"
+    border_width = "3px" if is_selected else "1px"
+    bg_color = "#F0F8FF" if is_selected else "#FFFFFF"
+    
+    card_html = f"""
+    <div style="
+        border: {border_width} solid {border_color};
+        border-radius: 10px;
+        padding: 14px;
+        background-color: {bg_color};
+        text-align: center;
+        min-height: 280px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    ">
+        <div>
+            <div style="font-size: 18px; font-weight: bold; margin-bottom: 4px;">{ticker}</div>
+            <div style="font-size: 12px; color: #666; margin-bottom: 8px;">{info.get('이름', '')}</div>
+            
+            <div style="text-align: left; font-size: 12px; line-height: 1.6; margin-bottom: 8px;">
+                <div>카테고리: {info.get('카테고리', '')}</div>
+                <div>보수율: {info.get('보수율', 0)*100:.2f}%</div>
+                <div>배당: {'있음' if info.get('배당') else '없음'}</div>
+                <div>위험도: {'⭐' * risk_stars}{'☆' * (5-risk_stars)}</div>
+            </div>
+            
+            <div style="font-size: 11px; color: #555; margin-bottom: 8px; font-style: italic;">
+                {descriptions.get(ticker, '')}
+            </div>
+        </div>
+        
+        <div style="font-size: 13px; font-weight: bold; color: #1f77b4;">
+            예상 수익률: {annual_return:.1f}%
+        </div>
+    </div>
+    """
+    
+    st.markdown(card_html, unsafe_allow_html=True)
+
+
 def detect_sector_overlap(selected_etfs):
     """선택 ETF 중 카테고리 중복 여부를 확인합니다."""
     category_map = {}
@@ -1185,16 +1265,52 @@ def run_streamlit_app():
         st.markdown("---")
         
         if overlap_info:
-            st.warning("⚠️ 섹터/카테고리가 중복되는 ETF가 있습니다. 대체 ETF를 확인해보세요.")
-            overlap_df = pd.DataFrame([
-                {
-                    "중복카테고리": item["중복카테고리"],
-                    "중복ETF": ", ".join(item["중복ETF"]),
-                    "대체ETF": ", ".join(item["대체ETF"])
-                }
-                for item in overlap_info
-            ])
-            st.dataframe(overlap_df, use_container_width=True)
+            st.warning("⚠️ 섹터/카테고리가 중복되는 ETF가 있습니다.")
+            
+            for item_idx, item in enumerate(overlap_info):
+                duplicate_etfs = item["중복ETF"]
+                alternative_etfs = item["대체ETF"]
+                
+                st.subheader(f"📌 {item['중복카테고리']} 중복 감지")
+                
+                for dup_idx, dup_ticker in enumerate(duplicate_etfs):
+                    st.write(f"**중복 ETF: {dup_ticker}** → 다음 옵션 중 선택")
+                    
+                    # 중복 ETF + 대체 ETF 옵션들을 가로로 배치
+                    all_options = [dup_ticker] + alternative_etfs
+                    cols = st.columns(min(4, len(all_options)))
+                    
+                    for col_idx, option_ticker in enumerate(all_options):
+                        with cols[col_idx % len(cols)]:
+                            # 현재 선택되었는지 확인
+                            is_selected = option_ticker in st.session_state.get("selected_etfs", [])
+                            
+                            # 카드 표시
+                            _display_etf_card_clickable(option_ticker, is_selected=is_selected)
+                            
+                            # 교체 버튼 (중복 ETF가 아닌 경우만)
+                            if option_ticker != dup_ticker:
+                                if st.button(
+                                    f"교체 → {option_ticker}",
+                                    key=f"replace_{item_idx}_{dup_idx}_{col_idx}",
+                                    use_container_width=True
+                                ):
+                                    if dup_ticker in st.session_state["selected_etfs"]:
+                                        idx = st.session_state["selected_etfs"].index(dup_ticker)
+                                        st.session_state["selected_etfs"][idx] = option_ticker
+                                        
+                                        # 비중 유지
+                                        etf_weights = st.session_state.get("etf_weights", {})
+                                        if dup_ticker in etf_weights:
+                                            etf_weights[option_ticker] = etf_weights.pop(dup_ticker)
+                                            st.session_state["etf_weights"] = etf_weights
+                                        
+                                        # 중복 감지 재계산
+                                        st.session_state["overlap_info"] = detect_sector_overlap(st.session_state["selected_etfs"])
+                                        st.success(f"✅ {dup_ticker} → {option_ticker}로 교체됨")
+                                        st.rerun()
+                    
+                    st.markdown("---")
         
         step_button_row()
 
@@ -1397,6 +1513,32 @@ def run_streamlit_app():
         )
         st.session_state["analysis_mode"] = selected_analysis_mode
 
+        # 예상 자산 성장곡선 (미리보기)
+        try:
+            preview_growth = generate_growth_path(
+                st.session_state.get("current_capital", 0.0),
+                st.session_state.get("monthly_contribution", 0.0),
+                st.session_state.get("years", 10),
+                interval_months=6,
+            )
+            from datetime import datetime
+            total_points = len(preview_growth)
+            start_date = datetime.now()
+            date_labels = []
+            for i in range(total_points):
+                months = i * 6
+                year = start_date.year + (start_date.month - 1 + months) // 12
+                month = (start_date.month - 1 + months) % 12 + 1
+                date_labels.append(f"{year}-{month:02d}")
+
+            fig_preview = go.Figure()
+            fig_preview.add_trace(go.Scatter(x=date_labels, y=[int(v) for v in preview_growth], mode="lines+markers", name="예상자산"))
+            fig_preview.update_layout(title="예상 자산 성장 곡선 (미리보기, 평균 수익률 6%)", xaxis_title="날짜", yaxis_title="자산(원)")
+            fig_preview.update_yaxes(tickformat=",.0f")
+            st.plotly_chart(fig_preview, use_container_width=True)
+        except Exception:
+            pass
+
         # 유틸: 금액 콤마 포맷 및 파서 (천단위 콤마, 소수 .00 제거)
         def fmt_money(n):
             try:
@@ -1498,23 +1640,7 @@ def run_streamlit_app():
                 else:
                     st.warning(f"목표 미달성 가능성: 예상 최종자산 {fmt_money(final_value)}원 < 목표 {fmt_money(target_val)}원")
 
-                # 그래프 (현재 날짜 기준 6개월 간격 x축)
-                from datetime import datetime
-
-                total_points = len(growth)
-                start_date = datetime.now()
-                date_labels = []
-                for i in range(total_points):
-                    months = i * 6
-                    year = start_date.year + (start_date.month - 1 + months) // 12
-                    month = (start_date.month - 1 + months) % 12 + 1
-                    date_labels.append(f"{year}-{month:02d}")
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=date_labels, y=[int(v) for v in growth], mode="lines+markers", name="예상자산"))
-                fig.update_layout(title=f"예상 자산 성장 곡선 (평균 수익률 6%)", xaxis_title="날짜", yaxis_title="자산(원)")
-                fig.update_yaxes(tickformat=",.0f")
-                st.plotly_chart(fig, use_container_width=True)
+                # (그래프 표시 제거됨: 예상 자산 성장 곡선은 더 이상 STEP3에서 표시되지 않습니다.)
 
         # MODE: 목표 기간 확인 — 목표 금액 입력 UI를 '목표 금액 달성'과 동일하게 만원/원 표시로 교체
         elif selected_analysis_mode == "목표 기간 확인":
@@ -1556,25 +1682,7 @@ def run_streamlit_app():
 
                 st.write(f"필요 월적립금: {fmt_money(int(required_monthly))}원 ({fmt_money(int(np.ceil(required_monthly/1e4)))}만원/월)")
 
-                # 그래프: 해당 월적립금으로 성장 경로 (6개월 간격)
-                growth_req = generate_growth_path(
-                    st.session_state["current_capital"], int(required_monthly), st.session_state["target_years"], interval_months=6
-                )
-                from datetime import datetime
-                total_points2 = len(growth_req)
-                start_date2 = datetime.now()
-                date_labels2 = []
-                for i in range(total_points2):
-                    months = i * 6
-                    year = start_date2.year + (start_date2.month - 1 + months) // 12
-                    month = (start_date2.month - 1 + months) % 12 + 1
-                    date_labels2.append(f"{year}-{month:02d}")
-
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=date_labels2, y=[int(v) for v in growth_req], mode="lines+markers", name="필요적립금 성장"))
-                fig2.update_layout(title=f"필요 적립금으로 예상 자산 성장 (평균 수익률 6%)", xaxis_title="날짜", yaxis_title="자산(원)")
-                fig2.update_yaxes(tickformat=",.0f")
-                st.plotly_chart(fig2, use_container_width=True)
+                # (그래프 표시 제거됨: 필요 적립금 성장 곡선은 더 이상 STEP3에서 표시되지 않습니다.)
 
         step_button_row()
 
