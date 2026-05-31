@@ -1,6 +1,8 @@
 ﻿# -*- coding: utf-8 -*-
+import calendar
 import os
 import re
+from datetime import date
 import numpy as np
 import anthropic
 import plotly.graph_objects as go
@@ -424,62 +426,136 @@ def _get_risk_stars(ticker):
         return 5
 
 
-def _display_etf_card_clickable(ticker, is_selected=False):
-    """클릭 가능한 ETF 카드를 반환합니다 (HTML 없이 순수 Streamlit 사용)."""
+ETF_CARD_DESCRIPTIONS = {
+    "VOO": "S&P 500 종합 지수", "QQQ": "나스닥 100 기술주", "VTI": "미국 전체 주식시장",
+    "SCHD": "배당성장형", "DGRO": "배당성장형", "VYM": "고배당 수익형",
+    "JEPI": "월배당 프리미엄", "JEPQ": "나스닥 월배당", "QYLD": "나스닥 고수익",
+    "QLD": "나스닥 2배 레버리지", "TQQQ": "나스닥 3배 레버리지",
+    "SSO": "S&P500 2배 레버리지", "UPRO": "S&P500 3배 레버리지", "SOXL": "반도체 3배 레버리지",
+    "VGT": "기술섹터 종합", "SOXX": "반도체 전문", "SMH": "반도체 전문",
+    "DRAM": "반도체 메모리", "XLV": "헬스케어 섹터", "SGOV": "초단기 미국채",
+}
+
+
+def _etf_card_html(ticker, is_selected=False):
+    """ETF 카드 HTML (한 줄, 들여쓰기 없음 — markdown 코드블록 방지)."""
     info = ETF_DATA.get(ticker, {})
     annual_return = _get_etf_annual_return(ticker)
     risk_stars = _get_risk_stars(ticker)
-    
-    descriptions = {
-        "VOO": "S&P 500 종합 지수", "QQQ": "나스닥 100 기술주", "VTI": "미국 전체 주식시장",
-        "SCHD": "배당성장형", "DGRO": "배당성장형", "VYM": "고배당 수익형",
-        "JEPI": "월배당 프리미엄", "JEPQ": "나스닥 월배당", "QYLD": "나스닥 고수익",
-        "QLD": "나스닥 2배 레버리지", "TQQQ": "나스닥 3배 레버리지",
-        "SSO": "S&P500 2배 레버리지", "UPRO": "S&P500 3배 레버리지", "SOXL": "반도체 3배 레버리지",
-        "VGT": "기술섹터 종합", "SOXX": "반도체 전문", "SMH": "반도체 전문",
-        "DRAM": "반도체 메모리", "XLV": "헬스케어 섹터", "SGOV": "초단기 미국채"
-    }
-    
-    # 카드 스타일 설정 (선택 여부에 따라)
     border_color = "#FF6B6B" if is_selected else "#CCCCCC"
     border_width = "3px" if is_selected else "1px"
     bg_color = "#F0F8FF" if is_selected else "#FFFFFF"
-    
-    card_html = f"""
-    <div style="
-        border: {border_width} solid {border_color};
-        border-radius: 10px;
-        padding: 14px;
-        background-color: {bg_color};
-        text-align: center;
-        min-height: 280px;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-    ">
-        <div>
-            <div style="font-size: 18px; font-weight: bold; margin-bottom: 4px;">{ticker}</div>
-            <div style="font-size: 12px; color: #666; margin-bottom: 8px;">{info.get('이름', '')}</div>
-            
-            <div style="text-align: left; font-size: 12px; line-height: 1.6; margin-bottom: 8px;">
-                <div>카테고리: {info.get('카테고리', '')}</div>
-                <div>보수율: {info.get('보수율', 0)*100:.2f}%</div>
-                <div>배당: {'있음' if info.get('배당') else '없음'}</div>
-                <div>위험도: {'⭐' * risk_stars}{'☆' * (5-risk_stars)}</div>
-            </div>
-            
-            <div style="font-size: 11px; color: #555; margin-bottom: 8px; font-style: italic;">
-                {descriptions.get(ticker, '')}
-            </div>
-        </div>
-        
-        <div style="font-size: 13px; font-weight: bold; color: #1f77b4;">
-            예상 수익률: {annual_return:.1f}%
-        </div>
-    </div>
-    """
-    
-    st.markdown(card_html, unsafe_allow_html=True)
+    selected_badge = (
+        '<div style="font-size:11px;font-weight:bold;color:#FF6B6B;margin-bottom:6px;">✓ 선택됨</div>'
+        if is_selected
+        else ""
+    )
+    return (
+        f'<div style="border:{border_width} solid {border_color};border-radius:10px;padding:14px;'
+        f'background-color:{bg_color};text-align:center;min-height:260px;display:flex;'
+        f'flex-direction:column;justify-content:space-between;box-sizing:border-box;cursor:pointer;">'
+        f"{selected_badge}"
+        f'<div style="font-size:18px;font-weight:bold;margin-bottom:4px;">{ticker}</div>'
+        f'<div style="font-size:12px;color:#666;margin-bottom:8px;">{info.get("이름", "")}</div>'
+        f'<div style="text-align:left;font-size:12px;line-height:1.6;margin-bottom:8px;">'
+        f'<div>카테고리: {info.get("카테고리", "")}</div>'
+        f'<div>보수율: {info.get("보수율", 0) * 100:.2f}%</div>'
+        f'<div>배당: {"있음" if info.get("배당") else "없음"}</div>'
+        f'<div>위험도: {"⭐" * risk_stars}{"☆" * (5 - risk_stars)}</div>'
+        f"</div>"
+        f'<div style="font-size:11px;color:#555;margin-bottom:8px;font-style:italic;">'
+        f'{ETF_CARD_DESCRIPTIONS.get(ticker, "")}</div>'
+        f'<div style="font-size:13px;font-weight:bold;color:#1f77b4;">'
+        f"예상 수익률: {annual_return:.1f}%</div></div>"
+    )
+
+
+def _display_etf_card_clickable(ticker, is_selected=False):
+    """ETF 카드를 HTML로 렌더링합니다."""
+    html = _etf_card_html(ticker, is_selected)
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+
+def _inject_overlap_card_button_css():
+    """중복 교체 UI에서 '버튼 자체'를 카드처럼 보이게 합니다."""
+    st.markdown(
+        """
+        <style>
+        /* overlap_pick_btn_* 버튼을 카드처럼 스타일링 */
+        button[kind] {
+            -webkit-tap-highlight-color: transparent;
+        }
+        div[data-testid="stButton"]:has(button[data-testid^="overlap_pick_btn_"]) > button,
+        div[data-testid="stButton"] > button[key^="overlap_pick_btn_"] {
+            /* fallback selector가 안 먹을 수 있어, 아래 selector도 함께 사용 */
+        }
+        /* Streamlit은 key를 attribute로 노출하지 않아 :has로 라벨 텍스트 기반 선택이 어렵습니다.
+           대신 중복 영역에서만 아래 공통 스타일을 적용하기 위해 wrapper class를 사용합니다. */
+        .overlap-card-grid [data-testid="stButton"] > button {
+            width: 100% !important;
+            min-height: 280px !important;
+            height: 280px !important;
+            padding: 16px !important;
+            border-radius: 12px !important;
+            border: 1px solid #CCCCCC !important;
+            background: #FFFFFF !important;
+            text-align: left !important;
+            white-space: pre-line !important; /* \\n 줄바꿈 */
+            line-height: 1.6 !important;
+            font-size: 12px !important;
+            font-weight: 500 !important;
+        }
+        .overlap-card-grid [data-testid="stButton"] > button:hover {
+            border-color: #1f77b4 !important;
+            background: #F7FBFF !important;
+        }
+        .overlap-card-grid .overlap-card-selected [data-testid="stButton"] > button {
+            border: 3px solid #FF6B6B !important;
+            background: #F0F8FF !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_overlap_card_selector(item_idx, dup_idx, option_ticker, is_picked):
+    """버튼을 카드처럼 스타일링하여 '카드 클릭' UX로 선택합니다."""
+    info = ETF_DATA.get(option_ticker, {})
+    risk_stars = _get_risk_stars(option_ticker)
+    annual_return = _get_etf_annual_return(option_ticker)
+    desc = ETF_CARD_DESCRIPTIONS.get(option_ticker, "")
+    selected_badge = "✓ 선택됨\n" if is_picked else ""
+    label = (
+        f"{selected_badge}"
+        f"{option_ticker}\n"
+        f"{info.get('이름', '')}\n\n"
+        f"카테고리: {info.get('카테고리', '')}\n"
+        f"보수율: {info.get('보수율', 0) * 100:.2f}%\n"
+        f"배당: {'있음' if info.get('배당') else '없음'}\n"
+        f"위험도: {'⭐' * risk_stars}{'☆' * (5 - risk_stars)}\n\n"
+        f"{desc}\n\n"
+        f"예상 수익률: {annual_return:.1f}%"
+    )
+    st.button(
+        label,
+        key=f"overlap_pick_btn_{item_idx}_{dup_idx}_{option_ticker}",
+        on_click=_set_overlap_pick,
+        args=(item_idx, dup_idx, option_ticker),
+        use_container_width=True,
+        help=f"{option_ticker} 선택",
+    )
+
+
+def _overlap_pick_key(item_idx, dup_idx):
+    return f"overlap_pick_{item_idx}_{dup_idx}"
+
+
+def _set_overlap_pick(item_idx, dup_idx, ticker):
+    st.session_state[_overlap_pick_key(item_idx, dup_idx)] = ticker
 
 
 def detect_sector_overlap(selected_etfs):
@@ -504,6 +580,33 @@ def detect_sector_overlap(selected_etfs):
             })
 
     return overlaps
+
+
+def _apply_overlap_replace(item_idx, dup_idx, dup_ticker):
+    """선택한 대체 ETF로 포트폴리오 중복 종목을 교체합니다."""
+    pick_key = _overlap_pick_key(item_idx, dup_idx)
+    option_ticker = st.session_state.get(pick_key)
+    if not option_ticker or option_ticker == dup_ticker:
+        return
+
+    selected = st.session_state.get("selected_etfs", [])
+    if dup_ticker not in selected:
+        return
+
+    idx = selected.index(dup_ticker)
+    selected[idx] = option_ticker
+    st.session_state["selected_etfs"] = selected
+
+    etf_weights = st.session_state.get("etf_weights", {})
+    if dup_ticker in etf_weights:
+        etf_weights[option_ticker] = etf_weights.pop(dup_ticker)
+        st.session_state["etf_weights"] = etf_weights
+
+    st.session_state["overlap_info"] = detect_sector_overlap(selected)
+    st.session_state[f"overlap_replace_msg_{item_idx}_{dup_idx}"] = (
+        f"{dup_ticker} → {option_ticker}로 교체됨"
+    )
+
 
 # ============================================================
 # 섹션 4. 시뮬레이션 함수
@@ -876,6 +979,134 @@ INVESTMENT_MODES = ["거치형", "적립형", "혼합형"]
 # MODE1(현재 포트 진단) 제거: MODE2=목표 금액 달성, MODE3=목표 기간 확인
 ANALYSIS_MODES = ["목표 금액 달성", "목표 기간 확인"]
 
+PERIOD_QUICK_OFFSETS = [
+    ("1년 후", 1),
+    ("5년 후", 5),
+    ("10년 후", 10),
+    ("20년 후", 20),
+    ("30년 후", 30),
+]
+
+
+def add_calendar_years(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, month=2, day=28)
+
+
+def _date_diff_ymd(start: date, end: date):
+    if end < start:
+        return 0, 0, 0
+    years = end.year - start.year
+    months = end.month - start.month
+    days = end.day - start.day
+    if days < 0:
+        months -= 1
+        prev_month = end.month - 1 if end.month > 1 else 12
+        prev_year = end.year if end.month > 1 else end.year - 1
+        days += calendar.monthrange(prev_year, prev_month)[1]
+    if months < 0:
+        years -= 1
+        months += 12
+    return years, months, days
+
+
+def period_between_dates_years(start: date, end: date) -> float:
+    if end < start:
+        return 1.0
+    days = (end - start).days
+    return max(days / 365.25, 30 / 365.25)
+
+
+def format_period_label(start: date, end: date) -> str:
+    if end < start:
+        return "종료일은 시작일 이후로 선택해 주세요."
+    y, m, d = _date_diff_ymd(start, end)
+    parts = []
+    if y:
+        parts.append(f"{y}년")
+    if m:
+        parts.append(f"{m}개월")
+    if d or not parts:
+        parts.append(f"{d}일")
+    approx = period_between_dates_years(start, end)
+    return f"{' '.join(parts)} (약 {approx:.1f}년)"
+
+
+def _set_period_end_callback(key_prefix: str, years_offset: int):
+    start_key = f"{key_prefix}_start"
+    end_key = f"{key_prefix}_end"
+    start = st.session_state.get(start_key, date.today())
+    st.session_state[end_key] = add_calendar_years(start, years_offset)
+
+
+def init_investment_period_state(key_prefix: str = "invest_period"):
+    today = date.today()
+    start_key = f"{key_prefix}_start"
+    end_key = f"{key_prefix}_end"
+    if start_key not in st.session_state:
+        st.session_state[start_key] = today
+    if end_key not in st.session_state:
+        default_years = int(st.session_state.get("years", st.session_state.get("target_years", 10)))
+        st.session_state[end_key] = add_calendar_years(today, default_years)
+
+
+def render_investment_period_selector(
+    key_prefix: str = "invest_period",
+    section_title: str = "투자 기간",
+    period_label: str = "투자 기간",
+) -> float:
+    """시작일·종료일 달력과 빠른 선택 버튼으로 기간을 설정하고, 연 단위 기간을 반환합니다."""
+    init_investment_period_state(key_prefix)
+    start_key = f"{key_prefix}_start"
+    end_key = f"{key_prefix}_end"
+    today = date.today()
+
+    st.markdown(f"#### {section_title}")
+    date_cols = st.columns(2)
+    with date_cols[0]:
+        st.date_input(
+            "시작일",
+            key=start_key,
+            min_value=today,
+            format="YYYY.MM.DD",
+        )
+    start_val = st.session_state[start_key]
+    with date_cols[1]:
+        st.date_input(
+            "종료일",
+            key=end_key,
+            min_value=start_val,
+            format="YYYY.MM.DD",
+        )
+
+    btn_cols = st.columns(len(PERIOD_QUICK_OFFSETS))
+    for col, (label, yrs) in zip(btn_cols, PERIOD_QUICK_OFFSETS):
+        col.button(
+            label,
+            key=f"{key_prefix}_quick_{yrs}",
+            on_click=_set_period_end_callback,
+            args=(key_prefix, yrs),
+            use_container_width=True,
+        )
+
+    end_val = st.session_state[end_key]
+    if end_val < start_val:
+        st.error("종료일은 시작일 이후로 선택해 주세요.")
+        years_val = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+    else:
+        st.markdown(
+            f'<p style="color:#6b7280;font-size:0.875rem;margin:0.25rem 0;">'
+            f"· {period_label}: <strong>{format_period_label(start_val, end_val)}</strong><br>"
+            f"· 빠른 선택 버튼은 시작일 기준으로 종료일을 자동 설정합니다."
+            f"</p>",
+            unsafe_allow_html=True,
+        )
+        years_val = period_between_dates_years(start_val, end_val)
+
+    return years_val
+
 
 def estimate_profile_locally(responses):
     """사용자 응답을 기반으로 투자 성향을 로컬에서 계산합니다."""
@@ -1037,6 +1268,8 @@ def run_streamlit_app():
         st.session_state["years"] = 10
         st.session_state["target_amount"] = 500000000.0
         st.session_state["target_years"] = 10
+        st.session_state["invest_period_start"] = date.today()
+        st.session_state["invest_period_end"] = add_calendar_years(date.today(), 10)
         st.session_state["sim_mode"] = INVESTMENT_MODES[1]
         st.session_state["simulation_results"] = None
 
@@ -1266,50 +1499,57 @@ def run_streamlit_app():
         
         if overlap_info:
             st.warning("⚠️ 섹터/카테고리가 중복되는 ETF가 있습니다.")
-            
+            st.caption("교체할 **카드를 눌러** 선택한 뒤, 하단 **선택한 ETF로 교체** 버튼을 누르세요.")
+            _inject_overlap_card_button_css()
+
             for item_idx, item in enumerate(overlap_info):
                 duplicate_etfs = item["중복ETF"]
                 alternative_etfs = item["대체ETF"]
-                
+
                 st.subheader(f"📌 {item['중복카테고리']} 중복 감지")
-                
+
                 for dup_idx, dup_ticker in enumerate(duplicate_etfs):
-                    st.write(f"**중복 ETF: {dup_ticker}** → 다음 옵션 중 선택")
-                    
-                    # 중복 ETF + 대체 ETF 옵션들을 가로로 배치
+                    pick_key = _overlap_pick_key(item_idx, dup_idx)
                     all_options = [dup_ticker] + alternative_etfs
+
+                    if pick_key not in st.session_state:
+                        default_pick = alternative_etfs[0] if alternative_etfs else dup_ticker
+                        st.session_state[pick_key] = default_pick
+
+                    picked_ticker = st.session_state[pick_key]
+                    st.write(f"**중복 ETF: {dup_ticker}** → 교체할 카드를 클릭해 선택하세요.")
+
                     cols = st.columns(min(4, len(all_options)))
-                    
                     for col_idx, option_ticker in enumerate(all_options):
                         with cols[col_idx % len(cols)]:
-                            # 현재 선택되었는지 확인
-                            is_selected = option_ticker in st.session_state.get("selected_etfs", [])
-                            
-                            # 카드 표시
-                            _display_etf_card_clickable(option_ticker, is_selected=is_selected)
-                            
-                            # 교체 버튼 (중복 ETF가 아닌 경우만)
-                            if option_ticker != dup_ticker:
-                                if st.button(
-                                    f"교체 → {option_ticker}",
-                                    key=f"replace_{item_idx}_{dup_idx}_{col_idx}",
-                                    use_container_width=True
-                                ):
-                                    if dup_ticker in st.session_state["selected_etfs"]:
-                                        idx = st.session_state["selected_etfs"].index(dup_ticker)
-                                        st.session_state["selected_etfs"][idx] = option_ticker
-                                        
-                                        # 비중 유지
-                                        etf_weights = st.session_state.get("etf_weights", {})
-                                        if dup_ticker in etf_weights:
-                                            etf_weights[option_ticker] = etf_weights.pop(dup_ticker)
-                                            st.session_state["etf_weights"] = etf_weights
-                                        
-                                        # 중복 감지 재계산
-                                        st.session_state["overlap_info"] = detect_sector_overlap(st.session_state["selected_etfs"])
-                                        st.success(f"✅ {dup_ticker} → {option_ticker}로 교체됨")
-                                        st.rerun()
-                    
+                            is_picked = picked_ticker == option_ticker
+                            wrapper_class = "overlap-card-selected" if is_picked else ""
+                            st.markdown(f'<div class="overlap-card-grid {wrapper_class}">', unsafe_allow_html=True)
+                            _render_overlap_card_selector(item_idx, dup_idx, option_ticker, is_picked)
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                    msg_key = f"overlap_replace_msg_{item_idx}_{dup_idx}"
+                    if msg_key in st.session_state:
+                        st.success(f"✅ {st.session_state.pop(msg_key)}")
+
+                    picked_label = picked_ticker
+                    replace_disabled = picked_ticker == dup_ticker
+                    if st.button(
+                        "선택한 ETF로 교체",
+                        key=f"overlap_apply_{item_idx}_{dup_idx}",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=replace_disabled,
+                        help="선택한 카드의 ETF로 중복 종목을 교체합니다.",
+                    ):
+                        _apply_overlap_replace(item_idx, dup_idx, dup_ticker)
+                        st.rerun()
+
+                    if replace_disabled:
+                        st.caption("현재 포트폴리오에 있는 중복 ETF와 동일합니다. 다른 카드를 선택해 주세요.")
+                    else:
+                        st.caption(f"선택됨: **{picked_label}** → **{dup_ticker}** 자리에 반영됩니다.")
+
                     st.markdown("---")
         
         step_button_row()
@@ -1626,8 +1866,14 @@ def run_streamlit_app():
                 monthly_won = parse_int(st.session_state.get("monthly_contribution_man", 0)) * 10000
                 st.session_state["target_amount"] = target_won
                 st.session_state["monthly_contribution"] = monthly_won
-                years_mode2 = st.number_input("투자 기간(년)", min_value=1, max_value=50, value=st.session_state.get("years", 10), key="years_mode2_input")
-                st.session_state["years"] = int(years_mode2)
+
+                st.write("---")
+                years_val = render_investment_period_selector(
+                    key_prefix="invest_period",
+                    section_title="투자 기간",
+                    period_label="투자 기간",
+                )
+                st.session_state["years"] = years_val
 
                 # 계산: 예상 성장 경로 및 달성 여부 (6개월 간격)
                 growth = generate_growth_path(
@@ -1668,13 +1914,18 @@ def run_streamlit_app():
                     btns[idx].button(f"+{fmt_money(inc)}만원", key=f"mode3_target_add_{inc}", on_click=change_man_amount, args=("target_amount_man", inc))
                 btns[-1].button("다시입력", key="mode3_target_reset", on_click=reset_man_amount, args=("target_amount_man",))
 
-                # 목표 기간 입력
-                target_years = st.number_input("목표 기간 (년)", min_value=1, max_value=50, value=st.session_state.get("target_years", 10), key="target_years_mode3_input")
+                st.write("---")
+                target_years_val = render_investment_period_selector(
+                    key_prefix="invest_period",
+                    section_title="목표 기간",
+                    period_label="목표 기간",
+                )
 
                 # 내부값 업데이트
                 target_won2 = parse_int(st.session_state.get("target_amount_man", "0")) * 10000
                 st.session_state["target_amount"] = target_won2
-                st.session_state["target_years"] = int(target_years)
+                st.session_state["target_years"] = target_years_val
+                st.session_state["years"] = target_years_val
 
                 required_monthly = estimate_required_contribution(
                     st.session_state["target_amount"], st.session_state["target_years"], st.session_state["current_capital"]
