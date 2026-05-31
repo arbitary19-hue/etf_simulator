@@ -1578,7 +1578,7 @@ def run_streamlit_app():
             with sim_container:
                 t_amt_str = st.text_input("목표 금액 (원)", value=fmt_money(st.session_state.get("target_amount", 500000000)), key="sim_target_ok")
                 monthly_str = st.text_input("월 적립금 (원)", value=fmt_money(st.session_state.get("monthly_contribution", 100000)), key="sim_monthly_man")
-                years_sim = st.number_input("투자 기간(년)", min_value=1, max_value=50, value=st.session_state.get("years", 10), key="sim_years")
+                years_sim = st.number_input("투자 기간(년)", min_value=1, max_value=50, value=int(st.session_state.get("years", 10)), key="sim_years")
 
                 # parse
                 t_val = parse_number_input(t_amt_str)
@@ -1616,7 +1616,7 @@ def run_streamlit_app():
         elif st.session_state.get("analysis_mode") == "목표 기간 확인":
             with sim_container:
                 t_amt_str = st.text_input("목표 금액 (억원)", value=fmt_money(float(st.session_state.get("target_amount", 500000000)) / 1e8), key="sim_target_ok_mode3")
-                target_years = st.number_input("목표 기간 (년)", min_value=1, max_value=50, value=st.session_state.get("target_years",10), key="sim_target_years_mode3")
+                target_years = st.number_input("목표 기간 (년)", min_value=1, max_value=50, value=int(st.session_state.get("target_years", 10)), key="sim_target_years_mode3")
 
                 t_val = parse_number_input(t_amt_str)
                 target_won = int(t_val * 1e8)
@@ -1752,32 +1752,6 @@ def run_streamlit_app():
             key="analysis_mode_select"
         )
         st.session_state["analysis_mode"] = selected_analysis_mode
-
-        # 예상 자산 성장곡선 (미리보기)
-        try:
-            preview_growth = generate_growth_path(
-                st.session_state.get("current_capital", 0.0),
-                st.session_state.get("monthly_contribution", 0.0),
-                st.session_state.get("years", 10),
-                interval_months=6,
-            )
-            from datetime import datetime
-            total_points = len(preview_growth)
-            start_date = datetime.now()
-            date_labels = []
-            for i in range(total_points):
-                months = i * 6
-                year = start_date.year + (start_date.month - 1 + months) // 12
-                month = (start_date.month - 1 + months) % 12 + 1
-                date_labels.append(f"{year}-{month:02d}")
-
-            fig_preview = go.Figure()
-            fig_preview.add_trace(go.Scatter(x=date_labels, y=[int(v) for v in preview_growth], mode="lines+markers", name="예상자산"))
-            fig_preview.update_layout(title="예상 자산 성장 곡선 (미리보기, 평균 수익률 6%)", xaxis_title="날짜", yaxis_title="자산(원)")
-            fig_preview.update_yaxes(tickformat=",.0f")
-            st.plotly_chart(fig_preview, use_container_width=True)
-        except Exception:
-            pass
 
         # 유틸: 금액 콤마 포맷 및 파서 (천단위 콤마, 소수 .00 제거)
         def fmt_money(n):
