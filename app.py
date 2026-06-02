@@ -20,207 +20,278 @@ load_dotenv()
 # 섹션 1. ETF 데이터 정의
 # ============================================================
 
+# 보수율: 발행사 공시 기준 순운용보수(연율, 소수). 2026년 6월 기준.
 ETF_DATA = {
-    "VOO":  {"이름": "Vanguard S&P 500",         "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
-    "QQQ":  {"이름": "Invesco Nasdaq 100",        "카테고리": "지수추적", "보수율": 0.0020, "배당": True,  "레버리지": False},
-    "VTI":  {"이름": "Vanguard Total Stock Market", "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
-    "SCHD": {"이름": "Schwab U.S. Dividend Equity", "카테고리": "배당형",   "보수율": 0.0006, "배당": True,  "레버리지": False},
-    "DGRO": {"이름": "iShares Core Dividend Growth", "카테고리": "배당형",   "보수율": 0.0008, "배당": True,  "레버리지": False},
-    "VYM":  {"이름": "Vanguard High Dividend Yield", "카테고리": "배당형",   "보수율": 0.0006, "배당": True,  "레버리지": False},
-    "JEPI": {"이름": "JPMorgan Equity Premium Income", "카테고리": "금융형", "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "JEPQ": {"이름": "JPMorgan Nasdaq Equity Premium", "카테고리": "금융형", "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "QYLD": {"이름": "Global X Nasdaq 100 Covered Call", "카테고리": "금융형", "보수율": 0.0060, "배당": True,  "레버리지": False},
-    "QLD":  {"이름": "ProShares Ultra QQQ",         "카테고리": "레버리지", "보수율": 0.0095, "배당": False, "레버리지": True},
-    "TQQQ": {"이름": "ProShares UltraPro QQQ",      "카테고리": "레버리지", "보수율": 0.0088, "배당": False, "레버리지": True},
-    "SSO":  {"이름": "ProShares Ultra S&P 500",     "카테고리": "레버리지", "보수율": 0.0089, "배당": False, "레버리지": True},
-    "UPRO": {"이름": "ProShares UltraPro S&P 500",  "카테고리": "레버리지", "보수율": 0.0091, "배당": False, "레버리지": True},
-    "SOXL": {"이름": "Direxion Daily Semiconductor Bull 3x", "카테고리": "레버리지", "보수율": 0.0075, "배당": False, "레버리지": True},
-    "VGT":  {"이름": "Vanguard Information Technology", "카테고리": "기술",     "보수율": 0.0010, "배당": True,  "레버리지": False},
-    "SOXX": {"이름": "iShares Semiconductor ETF",  "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "SMH":  {"이름": "VanEck Semiconductor ETF",   "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "DRAM": {"이름": "Global X Memory & Storage ETF", "카테고리": "기술", "보수율": 0.0050, "배당": True,  "레버리지": False},
-    "XLV":  {"이름": "Health Care Select Sector SPDR", "카테고리": "안정형", "보수율": 0.0010, "배당": True,  "레버리지": False},
-    "SGOV": {"이름": "iShares Short Treasury Bond ETF", "카테고리": "안정형", "보수율": 0.0007, "배당": True,  "레버리지": False},
+    "VOO":  {"이름": "Vanguard S&P 500 ETF",              "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
+    "QQQ":  {"이름": "Invesco QQQ Trust",                   "카테고리": "지수추적", "보수율": 0.0020, "배당": True,  "레버리지": False},
+    "VTI":  {"이름": "Vanguard Total Stock Market ETF",     "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
+    "SCHD": {"이름": "Schwab U.S. Dividend Equity ETF",     "카테고리": "배당형",   "보수율": 0.0006, "배당": True,  "레버리지": False},
+    "DGRO": {"이름": "iShares Core Dividend Growth ETF",    "카테고리": "배당형",   "보수율": 0.0008, "배당": True,  "레버리지": False},
+    "VYM":  {"이름": "Vanguard High Dividend Yield ETF",    "카테고리": "배당형",   "보수율": 0.0004, "배당": True,  "레버리지": False},
+    "JEPI": {"이름": "JPMorgan Equity Premium Income ETF",  "카테고리": "커버드콜", "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "JEPQ": {"이름": "JPMorgan Nasdaq Equity Premium Income ETF", "카테고리": "커버드콜", "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "QYLD": {"이름": "Global X Nasdaq 100 Covered Call ETF", "카테고리": "커버드콜", "보수율": 0.0060, "배당": True,  "레버리지": False},
+    "QLD":  {"이름": "ProShares Ultra QQQ",                 "카테고리": "레버리지", "보수율": 0.0095, "배당": False, "레버리지": True},
+    "TQQQ": {"이름": "ProShares UltraPro QQQ",              "카테고리": "레버리지", "보수율": 0.0082, "배당": False, "레버리지": True},
+    "SSO":  {"이름": "ProShares Ultra S&P500",              "카테고리": "레버리지", "보수율": 0.0087, "배당": False, "레버리지": True},
+    "UPRO": {"이름": "ProShares UltraPro S&P500",           "카테고리": "레버리지", "보수율": 0.0089, "배당": False, "레버리지": True},
+    "SOXL": {"이름": "Direxion Daily Semiconductor Bull 3X", "카테고리": "레버리지", "보수율": 0.0075, "배당": False, "레버리지": True},
+    "VGT":  {"이름": "Vanguard Information Technology ETF", "카테고리": "기술",     "보수율": 0.0009, "배당": True,  "레버리지": False},
+    "SOXX": {"이름": "iShares Semiconductor ETF",           "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "SMH":  {"이름": "VanEck Semiconductor ETF",            "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "DRAM": {"이름": "Roundhill Memory ETF",                "카테고리": "기술",     "보수율": 0.0065, "배당": True,  "레버리지": False},
 }
 
 # ============================================================
 # 섹션 2. AI 성향 분석 함수
 # ============================================================
 
-AI_PROFILE_CATEGORIES = ["성장형", "배당형", "금융형", "기술", "안정형"]
+AI_PROFILE_CATEGORIES = ["지수추적", "배당형", "커버드콜", "기술", "레버리지"]
 
-# 점수 계산에 사용될 모든 카테고리 (레버리지 포함)
-ALL_SCORE_CATEGORIES = ["성장형", "배당형", "금융형", "기술", "안정형", "레버리지"]
+# 포트폴리오 내 레버리지 ETF 비중 상한 (0~1)
+LEVERAGE_MAX_PORTFOLIO_WEIGHT = 0.30
 
-# 새로운 질문 구조: 조건부 질문 지원
+COVERED_CALL_EXPLANATION = """
+**커버드콜** 은 이미 보유한 주식(또는 주식 묶음 상품)에 대해 **콜옵션을 매도**해 옵션료(프리미엄)를 받는 전략입니다.
+
+- **어떻게 수익이 나나요?** → 옵션 매수자에게 받은 프리미엄이 **배당처럼 현금흐름**으로 들어옵니다. 월배당형 일부 상품이 이 방식을 씁니다.
+- **장점** → 시장이 보합·완만한 상승일 때 **월배당 등 현금흐름**을 노리기 좋습니다.
+- **단점** → 주가가 **급등**하면 옵션 때문에 상승 이익이 **제한**될 수 있고, **하락장**에서는 주식 손실은 그대로입니다.
+
+즉, “큰 상승보다 **꾸준한 현금흐름**”을 택하는 투자 성향에 가깝습니다.
+"""
+
+PROFILE_METRIC_HELP = {
+    "커버드콜": (
+        "보유 자산에 콜옵션을 매도해 프리미엄(월배당 등)을 받는 전략. "
+        "급등 시 수익은 제한될 수 있습니다."
+    ),
+}
+
+# 복수 선택 문항: 카테고리당 점수 상한 (무제한 선택 시 성향이 평탄해지는 것 방지)
+PROFILE_MULTI_SELECT_MAX = 2
+PROFILE_MULTI_SELECT_POINTS_PER_CHOICE = 2
+
+# 질문 구조: 단일 선택 + Q7 복수 선택(최대 2개) + Q5 조건부
 AI_PROFILE_QUESTIONS = {
     "Q1": {
-        "text": "1단계: 투자 기본 환경\n\n**Q1. 이번에 굴리실 투자 자금의 주된 목적과 목표 기간은 어떻게 되시나요?**",
+        "text": (
+            "1단계: 투자 가치관\n\n"
+            "**Q1. 주식 투자에서 가장 가깝게 느껴지는 목표는?**"
+        ),
         "choices": [
-            "① 1~3년 내에 써야 하는 전세금 / 결혼 자금 (단기)",
-            "② 5~10년 뒤 집 장만을 위한 목돈 마련 (중기)",
-            "③ 15년 이상 장기 노후 자금 준비 (장기)"
+            "① 안정과 꾸준한 현금흐름(배당·월수익)이 중요하다.",
+            "② 시장 전체 성장에 참여하고, 종목 고르기는 단순했으면 한다.",
+            "③ 기술·반도체 등 성장 산업의 upside에 투자하고 싶다.",
+            "④ 수익 극대화를 위해 변동성·위험도 감수할 수 있다.",
         ],
         "scores": [
-            {"안정형": 3},
-            {"배당형": 2, "성장형": 1},
-            {"성장형": 3, "레버리지": 1}
-        ]
+            {"배당형": 2, "커버드콜": 2},
+            {"지수추적": 3},
+            {"기술": 3},
+            {"레버리지": 2, "기술": 1},
+        ],
     },
     "Q2": {
-        "text": "**Q2. 매달 추가로 저축(적립식 투자)을 하실 여력이 있으신가요?**",
+        "text": (
+            "2단계: 포트폴리오 스타일\n\n"
+            "**Q2. 포트폴리오를 꾸릴 때 나에게 더 맞는 방식은?**"
+        ),
         "choices": [
-            "① 매달 일정 금액을 꾸준히 저축할 수 있습니다.",
-            "② 지금 가진 목돈을 한 번에 묻어두고 싶습니다."
+            "① 넓게 분산 — 한두 종목에 올인하기보다 여러 자산에 나눈다.",
+            "② 시장 지수 — 미국 주식 시장 전체를 한 번에 담는 방식이 좋다.",
+            "③ 섹터 집중 — 잘 아는 분야(기술·반도체 등)에 비중을 둔다.",
+            "④ 전략 집중 — 익숙한 전략(배당·커버드콜·레버리지)을 적극 활용한다.",
         ],
         "scores": [
-            {"성장형": 1},
-            {}
-        ]
+            {"배당형": 1, "지수추적": 2},
+            {"지수추적": 3},
+            {"기술": 3},
+            {"커버드콜": 1, "레버리지": 2, "배당형": 1},
+        ],
     },
     "Q3": {
-        "text": "2단계: 수익 보상 선호도\n\n**Q3. 투자로 얻는 이익 중 어떤 형태를 더 선호하시나요?**",
+        "text": (
+            "3단계: 수익 매력\n\n"
+            "**Q3. 투자 수익으로 더 끌리는 것은?**"
+        ),
         "choices": [
-            "① 월별로 꾸준히 나오는 배당/금리 수익 (현금흐름)",
-            "② 매달 나오진 않지만 기업이 성장하면서 주가가 크게 오르는 것",
-            "③ 주가 성장도 적당히 하면서, 매년 배당금도 늘려주는 것"
+            "① 주가 상승(자본 이득) — 기업이 커지며 오르는 수익",
+            "② 현금 수익 — 배당·이자·월배당처럼 들어오는 돈",
+            "③ 성장이 조금 더 중요하지만, 현금흐름도 무시하지 않는다.",
+            "④ 현금흐름이 조금 더 중요하지만, 성장 기회도 놓치고 싶지 않다.",
         ],
         "scores": [
-            {"배당형": 2, "금융형": 2},
-            {"성장형": 3},
-            {"배당형": 2, "성장형": 1}
-        ]
+            {"지수추적": 2, "기술": 1},
+            {"배당형": 2, "커버드콜": 2},
+            {"지수추적": 2, "배당형": 1},
+            {"배당형": 2, "커버드콜": 1, "지수추적": 1},
+        ],
     },
     "Q4": {
-        "text": "3단계: 위험 감수 성향 (가장 중요)\n\n**Q4. 만약 내가 1,000만 원을 투자했는데, 세계 경제 위기로 한 달 만에 30% 손실이 난다면 심정이 어떠실 것 같나요?**",
+        "text": (
+            "4단계: 위험 감수 (중요)\n\n"
+            "**Q4. 1,000만 원 투자 후 한 달 만에 30% 손실이 났다면?**"
+        ),
         "choices": [
-            "① 정신이 번쩍 든다. 손실이 두렵고 안정자산으로 옮기고 싶다.",
-            "② 속은 쓰리지만 시장은 우상향할 거니 꾹 참고 버틴다.",
-            "③ 어차피 장기 투자다. 바겐세일 기간이니 돈을 더 끌어와서 추가 매수한다."
+            "① 매우 불안하다. 손실을 줄이는 쪽(안정·현금흐름)으로 옮기고 싶다.",
+            "② 속상하지만 장기 우상향을 믿고 버틴다.",
+            "③ 오히려 저가 매수 기회로 보고 추가 매수를 고려한다.",
         ],
         "scores": [
-            {"안정형": 4},
-            {"성장형": 2, "배당형": 1},
-            {"성장형": 3, "레버리지": 2}
+            {"배당형": 3, "커버드콜": 1},
+            {"지수추적": 2, "배당형": 1},
+            {"지수추적": 2, "레버리지": 2, "기술": 1},
         ],
-        "follow_up": {
-            3: "Q5"  # Q4에서 ③번 선택 시 Q5로 이동
-        }
+        "follow_up": {2: "Q5"},
     },
     "Q5": {
-        "text": "**Q5. (심화 질문) 시장이 내 예상과 반대로 갈 때 3배 빠르게 자산이 녹아내리는 극단적인 변동성(레버리지)도 감당할 준비가 되셨나요?**",
+        "text": (
+            "**Q5. (심화) 예상과 반대로 갈 때, 하루 수익·손실이 3배로 움직이는 상품도 감당할 수 있나요?**"
+        ),
         "choices": [
-            "① 아, 3배는 너무 무섭네요. 일반 지수 추종이 좋겠습니다.",
-            "② 하이 리스크 하이 리턴! 화끈하게 감수하겠습니다."
+            "① 3배는 부담된다. 일반 지수·분산 쪽이 낫다.",
+            "② 감수할 수 있다. 수익을 위해 레버리지도 고려한다.",
         ],
         "scores": [
-            {"성장형": 1},
-            {"레버리지": 3, "성장형": 1}
+            {"지수추적": 1},
+            {"레버리지": 3},
         ],
-        "condition": "previous_q4_choice == 2"
     },
     "Q6": {
-        "text": "4단계: 관심 분야\n\n**Q6. 투자 시 특정 산업을 선택할 때, 어떤 방식을 선호하시나요?**",
+        "text": (
+            "5단계: 시장 vs 섹터\n\n"
+            "**Q6. 미국 주식 투자 시 더 끌리는 접근은?**"
+        ),
         "choices": [
-            "① 미국 전체 시장(대기업 500개~전체)에 분산 투자하고 싶다.",
-            "② AI, 반도체, IT 기술 기업들의 미래를 강력하게 믿는다.",
-            "③ 고령화 시대에 헬스케어/바이오/의약품 분야가 유망하다고 본다."
+            "① 미국 주식 시장 전체에 골고루 분산",
+            "② AI·반도체·IT 등 기술 성장에 베팅",
         ],
         "scores": [
-            {"성장형": 1},
-            {"기술": 3, "성장형": 1},
-            {"안정형": 2, "기술": 1}
-        ]
+            {"지수추적": 3},
+            {"기술": 3},
+        ],
     },
     "Q7": {
-        "text": "5단계: 배당/금융형 선호도\n\n**Q7. 배당 수익이 중요하다면, 어떤 방식을 원하시나요?**",
+        "type": "multi",
+        "max_select": PROFILE_MULTI_SELECT_MAX,
+        "text": (
+            "6단계: 관심 상품 유형 (복수 선택)\n\n"
+            f"**Q7. 포트폴리오에 넣고 싶은 상품 유형을 골라 주세요. (최대 {PROFILE_MULTI_SELECT_MAX}개)**\n\n"
+            "해당되는 것만 고르세요. 전부 고르지 않아도 됩니다."
+        ),
         "choices": [
-            "① 매년 1-2회 정도 정해진 시기에 받는 배당금 (연 배당)",
-            "② 예측 불가능하지만 자주 받는 배당/수익 (월 배당)",
-            "③ 잘 모르겠는데, 배당이 중요하지는 않습니다."
+            "① 시장 지수 따라가기 (미국 대형주·전체 시장 등)",
+            "② 배당 중심 (정기적으로 배당금 받기)",
+            "③ 월배당·커버드콜 (매달 현금흐름 위주)",
+            "④ 기술·반도체 (IT·칩 관련 기업)",
+            "⑤ 레버리지 (하루 단위로 수익·손실이 2~3배로 움직이는 상품)",
         ],
         "scores": [
-            {"배당형": 3},
-            {"금융형": 3, "배당형": 1},
-            {}
-        ]
+            {"지수추적": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+            {"배당형": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+            {"커버드콜": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+            {"기술": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+            {"레버리지": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+        ],
     },
     "Q8": {
-        "text": "6단계: 기술/반도체 집중도\n\n**Q8. 기술 섹터 내에서 어떤 전략을 선호하시나요?**",
+        "text": (
+            "7단계: 기술 섹터 세부\n\n"
+            "**Q8. 기술·반도체 투자 시 선호하는 집중도는?**"
+        ),
         "choices": [
-            "① 기술/IT 전체에 분산 투자 (Apple, NVIDIA, Google, Microsoft 등 다양)",
-            "② 반도체 기업 집중 (NVIDIA, TSMC, Intel, Broadcom 등)",
-            "③ 반도체에 매우 집중 + 3배 레버리지 추구"
+            "① 기술/IT 전체에 분산 (빅테크·소프트웨어·하드웨어)",
+            "② 반도체 기업에 집중",
+            "③ 반도체 + 높은 변동(레버리지)까지 추구",
         ],
         "scores": [
             {"기술": 2},
             {"기술": 3},
-            {"기술": 3, "레버리지": 2}
-        ]
-    }
+            {"기술": 2, "레버리지": 2},
+        ],
+    },
 }
 
-# 질문 순서 (조건부 질문 제외)
 AI_PROFILE_BASE_QUESTIONS = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]
+
+
+def get_profile_question_order(responses):
+    """응답 상태에 따른 질문 순서(Q5 조건부 포함)."""
+    order = list(AI_PROFILE_BASE_QUESTIONS)
+    if responses.get("Q4") == 2:
+        q4_idx = order.index("Q4")
+        order.insert(q4_idx + 1, "Q5")
+    return order
+
+
+def count_total_profile_questions(responses):
+    """진행률 표시용 전체 문항 수."""
+    return len(get_profile_question_order(responses))
 
 
 def get_next_question(current_q, responses):
     """현재 질문 다음에 표시할 질문을 결정합니다."""
-    # Q5 다음은 항상 Q6
-    if current_q == "Q5":
-        return "Q6"
-    
-    # Q4 → Q5로의 조건부 분기
-    if current_q == "Q4" and responses.get("Q4") == 2:  # Q4에서 ③번(인덱스 2) 선택
-        return "Q5"
-    
-    # Q4에서 ③번이 아니면 Q6으로
-    if current_q == "Q4" and responses.get("Q4") != 2:
-        return "Q6"
-    
-    # 기본 순서로 진행
-    base_order = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]  # Q5는 조건부
+    order = get_profile_question_order(responses)
     try:
-        current_idx = base_order.index(current_q)
-        if current_idx + 1 < len(base_order):
-            return base_order[current_idx + 1]
+        idx = order.index(current_q)
+        if idx + 1 < len(order):
+            return order[idx + 1]
     except ValueError:
         pass
-    
     return None
 
 
+def _apply_choice_score_dict(scores, choice_scores):
+    for category, points in choice_scores.items():
+        if category in scores:
+            scores[category] += points
+
+
+def _is_multi_select_question(q_key):
+    return AI_PROFILE_QUESTIONS.get(q_key, {}).get("type") == "multi"
+
+
 def calculate_profile_scores(responses):
-    """사용자 응답을 기반으로 카테고리별 점수를 계산합니다."""
+    """사용자 응답을 기반으로 5개 투자 성향 카테고리별 점수(%)를 계산합니다."""
     scores = {cat: 0 for cat in AI_PROFILE_CATEGORIES}
-    leverage_score = 0  # 레버리지 점수 별도 추적
-    
-    for q_key, choice_idx in responses.items():
+
+    for q_key, answer in responses.items():
         if q_key not in AI_PROFILE_QUESTIONS:
             continue
-        
+
         q_data = AI_PROFILE_QUESTIONS[q_key]
-        if choice_idx is None or choice_idx >= len(q_data["scores"]):
-            continue
-            
-        choice_scores = q_data["scores"][choice_idx]
-        for category, points in choice_scores.items():
-            # 레버리지 점수는 별도로 추적
-            if category == "레버리지":
-                leverage_score += points
-            elif category in scores:
-                scores[category] += points
-    
-    # 정규화 (합계 100%)
+        score_table = q_data.get("scores", [])
+
+        if _is_multi_select_question(q_key):
+            indices = answer if isinstance(answer, list) else []
+            max_select = q_data.get("max_select", PROFILE_MULTI_SELECT_MAX)
+            for choice_idx in indices[:max_select]:
+                if 0 <= choice_idx < len(score_table):
+                    _apply_choice_score_dict(scores, score_table[choice_idx])
+        else:
+            if answer is None or not isinstance(answer, int):
+                continue
+            if answer >= len(score_table):
+                continue
+            _apply_choice_score_dict(scores, score_table[answer])
+
+    if responses.get("Q5") == 0:
+        scores["레버리지"] = 0
+
     total = sum(scores.values())
     if total == 0:
-        profile = {cat: 100 / len(AI_PROFILE_CATEGORIES) for cat in AI_PROFILE_CATEGORIES}
+        profile = {cat: round(100 / len(AI_PROFILE_CATEGORIES), 2) for cat in AI_PROFILE_CATEGORIES}
     else:
         profile = {cat: round((scores[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
-    
-    # 레버리지 점수를 별도 필드로 저장 (성장형에 영향)
-    profile["_leverage_score"] = leverage_score
-    
+
+    leverage_from_q5 = responses.get("Q5") == 1 if "Q5" in responses else None
+    leverage_from_q7 = 4 in responses.get("Q7", []) if isinstance(responses.get("Q7"), list) else False
+    if leverage_from_q5 is not None:
+        profile["_leverage_allowed"] = leverage_from_q5
+    else:
+        profile["_leverage_allowed"] = scores["레버리지"] > 0 or leverage_from_q7
+
     return profile
 
 
@@ -228,173 +299,147 @@ def get_question_text_and_choices(q_key):
     """질문 키에 해당하는 텍스트와 선택지를 반환합니다."""
     if q_key not in AI_PROFILE_QUESTIONS:
         return None, None
-    
+
     q_data = AI_PROFILE_QUESTIONS[q_key]
     return q_data["text"], q_data["choices"]
+
+
+def render_profile_metrics(profile_weights):
+    """투자 성향 비율과 커버드콜 설명을 표시합니다."""
+    cols = st.columns(len(AI_PROFILE_CATEGORIES))
+    for i, cat in enumerate(AI_PROFILE_CATEGORIES):
+        with cols[i]:
+            st.metric(
+                cat,
+                f"{profile_weights.get(cat, 0)}%",
+                help=PROFILE_METRIC_HELP.get(cat),
+            )
+    with st.expander("💡 커버드콜이란? (처음이시라면 읽어보세요)"):
+        st.markdown(COVERED_CALL_EXPLANATION)
 
 # ============================================================
 # 섹션 3. ETF 추천 함수
 # ============================================================
 
-ETF_CATEGORY_MAP = {
-    "지수추적": "성장형",
-    "배당형": "배당형",
-    "금융형": "금융형",
-    "레버리지": "성장형",
-    "기술": "기술",
-    "안정형": "안정형",
-}
-
 CATEGORY_TO_ETFS = {
-    "성장형": ["VOO", "QQQ", "VTI"],  # 지수추적만
+    "지수추적": ["VOO", "QQQ", "VTI"],
     "배당형": ["SCHD", "DGRO", "VYM"],
-    "금융형": ["JEPI", "JEPQ", "QYLD"],
+    "커버드콜": ["JEPI", "JEPQ", "QYLD"],
     "기술": ["VGT", "SOXX", "SMH", "DRAM"],
-    "안정형": ["SGOV", "XLV"],
     "레버리지": ["TQQQ", "UPRO", "SOXL", "QLD", "SSO"],
 }
 
 
 def _normalize_profile_weights(profile_weights):
-    """레버리지 점수를 제외한 카테고리만 정규화합니다."""
-    regular_weights = {cat: profile_weights.get(cat, 0) for cat in AI_PROFILE_CATEGORIES}
+    """5개 투자 성향 카테고리 비중을 0~1로 정규화합니다."""
+    regular_weights = {cat: float(profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES}
+    if not profile_weights.get("_leverage_allowed", True):
+        regular_weights["레버리지"] = 0
     total = sum(regular_weights.values())
     if total <= 0:
         raise ValueError("프로필 가중치 합계는 0보다 커야 합니다.")
     return {cat: regular_weights[cat] / total for cat in AI_PROFILE_CATEGORIES}
 
 
-def recommend_etfs_with_weights(profile_weights, top_n=5):
-    """투자 성향 비율을 받아 ETF와 비중을 함께 추천합니다.
-    
-    반환: {ticker: weight} 딕셔너리
-    """
-    normalized = _normalize_profile_weights(profile_weights)
-    leverage_score = profile_weights.get("_leverage_score", 0)
-    
-    # 레버리지 점수를 성장형에 통합하여 비중 계산 (0~1 사이 정규화)
-    # 예: 레버리지 0.3은 성장형의 30% 가중치로 추가
-    growth_with_leverage = normalized["성장형"] + (leverage_score * normalized["성장형"])
-    
-    selected = []
-    
-    # 각 카테고리의 할당 개수 계산 (점수에 비례)
-    # 성장형 비중이 높으면 레버리지 선택 가능성도 높아짐
-    category_counts = {}
-    for category in AI_PROFILE_CATEGORIES:
-        if category == "성장형":
-            allocation = int(round(growth_with_leverage * top_n))
-        else:
-            allocation = int(round(normalized[category] * top_n))
-        category_counts[category] = max(0, allocation)
-    
-    # 반올림으로 인해 합계가 top_n과 안 맞을 수 있으니 조정
+def _adjust_category_counts(normalized, top_n):
+    """성향 비율에 따라 카테고리별 ETF 개수를 배분합니다."""
+    category_counts = {
+        cat: max(0, int(round(normalized[cat] * top_n)))
+        for cat in AI_PROFILE_CATEGORIES
+    }
     total_allocated = sum(category_counts.values())
     if total_allocated < top_n:
-        # 가장 높은 스코어의 카테고리에 추가
-        top_category = "성장형" if growth_with_leverage >= normalized["성장형"] else max(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c])
+        top_category = max(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c])
         category_counts[top_category] += top_n - total_allocated
     elif total_allocated > top_n:
-        # 가장 낮은 스코어의 카테고리에서 제거
         lowest_category = min(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c])
-        category_counts[lowest_category] = max(0, category_counts[lowest_category] - (total_allocated - top_n))
-    
-    # 카테고리별로 정렬 (높은 점수 순)
-    sorted_categories = sorted(AI_PROFILE_CATEGORIES, key=lambda c: normalized[c], reverse=True)
-    
-    # ETF 선택 + 비중 저장
-    etf_to_category = {}  # ticker -> category 매핑
-    etf_to_weight_category = {}  # ticker -> 비중 계산용 카테고리 (레버리지용 별도 처리)
-    
-    # 성장형에서 레버리지 선택 개수 결정
-    growth_allocation = category_counts["성장형"]
-    leverage_count = 0
-    if leverage_score > 0 and growth_allocation > 0:
-        # 레버리지 스코어 비율에 따라 일부를 레버리지 ETF로 대체
-        leverage_ratio = leverage_score / (normalized["성장형"] + leverage_score)
-        leverage_count = max(1, int(round(growth_allocation * leverage_ratio)))
-    
-    # 각 카테고리에서 필요한 개수만큼 ETF 선택
+        category_counts[lowest_category] = max(
+            0, category_counts[lowest_category] - (total_allocated - top_n)
+        )
+    return category_counts
+
+
+def _cap_leverage_weights(weights, max_share=LEVERAGE_MAX_PORTFOLIO_WEIGHT):
+    """레버리지 ETF 합산 비중이 상한을 넘으면 조정합니다."""
+    leverage_tickers = [t for t in weights if ETF_DATA.get(t, {}).get("레버리지")]
+    if not leverage_tickers:
+        return weights
+
+    lev_total = sum(weights[t] for t in leverage_tickers)
+    if lev_total <= max_share:
+        return weights
+
+    scale = max_share / lev_total
+    new_weights = dict(weights)
+    freed = 0.0
+    for ticker in leverage_tickers:
+        old = new_weights[ticker]
+        new_weights[ticker] = old * scale
+        freed += old - new_weights[ticker]
+
+    non_leverage = [t for t in weights if t not in leverage_tickers]
+    if non_leverage and freed > 0:
+        bonus = freed / len(non_leverage)
+        for ticker in non_leverage:
+            new_weights[ticker] += bonus
+
+    total = sum(new_weights.values())
+    if total <= 0:
+        return weights
+    return {ticker: round(w / total, 4) for ticker, w in new_weights.items()}
+
+
+def recommend_etfs_with_weights(profile_weights, top_n=5):
+    """투자 성향 비율(5축)을 받아 ETF와 비중을 함께 추천합니다.
+
+    반환: {ticker: weight} 딕셔너리
+    """
+    leverage_allowed = profile_weights.get("_leverage_allowed", True)
+    normalized = _normalize_profile_weights(profile_weights)
+    category_counts = _adjust_category_counts(normalized, top_n)
+    sorted_categories = sorted(
+        AI_PROFILE_CATEGORIES, key=lambda c: normalized[c], reverse=True
+    )
+
+    selected = []
+    etf_to_category = {}
+
     for category in sorted_categories:
         needed = category_counts[category]
         if needed <= 0:
             continue
-        
-        # 성장형이면서 레버리지 할당이 있는 경우
-        if category == "성장형" and leverage_count > 0:
-            # 일부는 레버리지에서, 일부는 성장형에서 선택
-            leverage_etfs = CATEGORY_TO_ETFS.get("레버리지", [])[:leverage_count]
-            growth_etfs = CATEGORY_TO_ETFS.get(category, [])[leverage_count:leverage_count + (needed - leverage_count)]
-            
-            for ticker in leverage_etfs:
-                if ticker not in selected and len(selected) < top_n:
-                    selected.append(ticker)
-                    etf_to_category[ticker] = "성장형"
-                    etf_to_weight_category[ticker] = "레버리지"  # 비중 계산용
-            
-            for ticker in growth_etfs:
-                if ticker not in selected and len(selected) < top_n:
-                    selected.append(ticker)
-                    etf_to_category[ticker] = "성장형"
-                    etf_to_weight_category[ticker] = "성장형"
-        else:
-            etf_list = CATEGORY_TO_ETFS.get(category, [])[:needed]
-            for ticker in etf_list:
-                if ticker not in selected and len(selected) < top_n:
-                    selected.append(ticker)
-                    etf_to_category[ticker] = category
-                    etf_to_weight_category[ticker] = category
-    
-    # 부족한 경우 더 추가
+        if category == "레버리지" and not leverage_allowed:
+            continue
+
+        for ticker in CATEGORY_TO_ETFS.get(category, [])[:needed]:
+            if ticker not in selected and len(selected) < top_n:
+                selected.append(ticker)
+                etf_to_category[ticker] = category
+
     if len(selected) < top_n:
         all_etfs = []
         for cat_etfs in CATEGORY_TO_ETFS.values():
             all_etfs.extend(cat_etfs)
-        
         for ticker in all_etfs:
             if ticker not in selected and len(selected) < top_n:
                 selected.append(ticker)
-                etf_category = etf_to_category.get(ticker, ETF_CATEGORY_MAP.get(ETF_DATA[ticker]["카테고리"], "성장형"))
-                etf_to_category[ticker] = etf_category
-                etf_to_weight_category[ticker] = etf_category
-    
-    # 비중 계산: 카테고리별 점수에 따라 분배
-    # 레버리지는 성장형 비중의 일부로 계산
+                etf_to_category[ticker] = ETF_DATA[ticker]["카테고리"]
+
     weights = {}
-    
-    # 레버리지 ETF와 일반 성장형 ETF를 구분해서 비중 계산
-    leverage_etfs = [t for t in selected if etf_to_weight_category.get(t) == "레버리지"]
-    growth_etfs = [t for t in selected if etf_to_weight_category.get(t) == "성장형"]
-    
-    # 성장형 비중을 레버리지와 성장형으로 분배
-    if leverage_etfs and growth_etfs:
-        leverage_ratio = leverage_score / (normalized["성장형"] + leverage_score)
-        growth_allocation_weight = normalized["성장형"] * (1 - leverage_ratio)
-        leverage_allocation_weight = normalized["성장형"] * leverage_ratio
-    else:
-        growth_allocation_weight = normalized["성장형"]
-        leverage_allocation_weight = 0
-    
     for ticker in selected:
-        weight_category = etf_to_weight_category.get(ticker, etf_to_category.get(ticker, "성장형"))
-        
-        if weight_category == "레버리지":
-            category_weight = leverage_allocation_weight
-            same_category_etfs = leverage_etfs
-        elif weight_category == "성장형":
-            category_weight = growth_allocation_weight
-            same_category_etfs = growth_etfs
-        else:
-            category_weight = normalized.get(weight_category, 0)
-            same_category_etfs = [t for t in selected if etf_to_weight_category.get(t) == weight_category]
-        
-        weights[ticker] = category_weight / len(same_category_etfs) if same_category_etfs else 1 / len(selected)
-    
-    # 정규화
+        category = etf_to_category[ticker]
+        same_category = [t for t in selected if etf_to_category[t] == category]
+        weights[ticker] = (
+            normalized[category] / len(same_category)
+            if same_category
+            else 1 / len(selected)
+        )
+
     total_weight = sum(weights.values())
     if total_weight > 0:
         weights = {ticker: round(w / total_weight, 4) for ticker, w in weights.items()}
-    
+
+    weights = _cap_leverage_weights(weights)
     return dict(sorted(weights.items(), key=lambda x: x[1], reverse=True))
 
 
@@ -426,15 +471,29 @@ def _get_risk_stars(ticker):
         return 5
 
 
-ETF_CARD_DESCRIPTIONS = {
-    "VOO": "S&P 500 종합 지수", "QQQ": "나스닥 100 기술주", "VTI": "미국 전체 주식시장",
-    "SCHD": "배당성장형", "DGRO": "배당성장형", "VYM": "고배당 수익형",
-    "JEPI": "월배당 프리미엄", "JEPQ": "나스닥 월배당", "QYLD": "나스닥 고수익",
-    "QLD": "나스닥 2배 레버리지", "TQQQ": "나스닥 3배 레버리지",
-    "SSO": "S&P500 2배 레버리지", "UPRO": "S&P500 3배 레버리지", "SOXL": "반도체 3배 레버리지",
-    "VGT": "기술섹터 종합", "SOXX": "반도체 전문", "SMH": "반도체 전문",
-    "DRAM": "반도체 메모리", "XLV": "헬스케어 섹터", "SGOV": "초단기 미국채",
+ETF_SUMMARY_DESCRIPTIONS = {
+    "VOO": "미국 대형주 500개 지수 추종",
+    "QQQ": "미국 기술 대형주 100개 지수 추종",
+    "VTI": "미국 주식 시장 전체 지수 추종",
+    "SCHD": "미국 배당성장주 묶음",
+    "DGRO": "배당이 늘어나는 기업 위주",
+    "VYM": "배당 수익 위주",
+    "JEPI": "대형주 + 커버드콜 · 월배당",
+    "JEPQ": "기술 대형주 + 커버드콜 · 월배당",
+    "QYLD": "기술 지수 + 커버드콜 · 월배당",
+    "QLD": "기술 지수 · 2배 레버리지",
+    "TQQQ": "기술 지수 · 3배 레버리지",
+    "SSO": "미국 대형주 지수 · 2배 레버리지",
+    "UPRO": "미국 대형주 지수 · 3배 레버리지",
+    "SOXL": "반도체 · 3배 레버리지",
+    "VGT": "미국 IT·기술 기업 묶음",
+    "SOXX": "반도체 기업 묶음",
+    "SMH": "반도체 기업 묶음",
+    "DRAM": "반도체 메모리 기업 집중",
 }
+
+# 카드 UI 등에서 사용 (ETF_SUMMARY_DESCRIPTIONS와 동일)
+ETF_CARD_DESCRIPTIONS = ETF_SUMMARY_DESCRIPTIONS
 
 
 def _etf_card_html(ticker, is_selected=False):
@@ -479,133 +538,70 @@ def _display_etf_card_clickable(ticker, is_selected=False):
         st.markdown(html, unsafe_allow_html=True)
 
 
-def _inject_overlap_card_button_css():
-    """중복 교체 UI에서 '버튼 자체'를 카드처럼 보이게 합니다."""
-    st.markdown(
-        """
-        <style>
-        /* overlap_pick_btn_* 버튼을 카드처럼 스타일링 */
-        button[kind] {
-            -webkit-tap-highlight-color: transparent;
-        }
-        div[data-testid="stButton"]:has(button[data-testid^="overlap_pick_btn_"]) > button,
-        div[data-testid="stButton"] > button[key^="overlap_pick_btn_"] {
-            /* fallback selector가 안 먹을 수 있어, 아래 selector도 함께 사용 */
-        }
-        /* Streamlit은 key를 attribute로 노출하지 않아 :has로 라벨 텍스트 기반 선택이 어렵습니다.
-           대신 중복 영역에서만 아래 공통 스타일을 적용하기 위해 wrapper class를 사용합니다. */
-        .overlap-card-grid [data-testid="stButton"] > button {
-            width: 100% !important;
-            min-height: 280px !important;
-            height: 280px !important;
-            padding: 16px !important;
-            border-radius: 12px !important;
-            border: 1px solid #CCCCCC !important;
-            background: #FFFFFF !important;
-            text-align: left !important;
-            white-space: pre-line !important; /* \\n 줄바꿈 */
-            line-height: 1.6 !important;
-            font-size: 12px !important;
-            font-weight: 500 !important;
-        }
-        .overlap-card-grid [data-testid="stButton"] > button:hover {
-            border-color: #1f77b4 !important;
-            background: #F7FBFF !important;
-        }
-        .overlap-card-grid .overlap-card-selected [data-testid="stButton"] > button {
-            border: 3px solid #FF6B6B !important;
-            background: #F0F8FF !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+def get_same_category_replacement_options(ticker, selected_etfs):
+    """포트폴리오 종목과 동일 카테고리의 교체 후보(현재 종목 유지 + 미선택 종목)."""
+    category = ETF_DATA.get(ticker, {}).get("카테고리")
+    if not category:
+        return [ticker]
+    alternatives = sorted(
+        t
+        for t, info in ETF_DATA.items()
+        if info.get("카테고리") == category and t not in selected_etfs
     )
+    return [ticker] + alternatives
 
 
-def _render_overlap_card_selector(item_idx, dup_idx, option_ticker, is_picked):
-    """버튼을 카드처럼 스타일링하여 '카드 클릭' UX로 선택합니다."""
+def _format_replace_option_label(option_ticker, current_ticker):
+    """종목 교체 라디오 한 줄(멀티라인) 라벨."""
     info = ETF_DATA.get(option_ticker, {})
-    risk_stars = _get_risk_stars(option_ticker)
-    annual_return = _get_etf_annual_return(option_ticker)
-    desc = ETF_CARD_DESCRIPTIONS.get(option_ticker, "")
-    selected_badge = "✓ 선택됨\n" if is_picked else ""
-    label = (
-        f"{selected_badge}"
-        f"{option_ticker}\n"
-        f"{info.get('이름', '')}\n\n"
-        f"카테고리: {info.get('카테고리', '')}\n"
-        f"보수율: {info.get('보수율', 0) * 100:.2f}%\n"
-        f"배당: {'있음' if info.get('배당') else '없음'}\n"
-        f"위험도: {'⭐' * risk_stars}{'☆' * (5 - risk_stars)}\n\n"
-        f"{desc}\n\n"
-        f"예상 수익률: {annual_return:.1f}%"
-    )
-    st.button(
-        label,
-        key=f"overlap_pick_btn_{item_idx}_{dup_idx}_{option_ticker}",
-        on_click=_set_overlap_pick,
-        args=(item_idx, dup_idx, option_ticker),
-        use_container_width=True,
-        help=f"{option_ticker} 선택",
+    current_tag = " (현재 보유)" if option_ticker == current_ticker else ""
+    summary = ETF_SUMMARY_DESCRIPTIONS.get(option_ticker, info.get("이름", ""))
+    return (
+        f"{option_ticker}{current_tag}\n"
+        f"{summary}\n"
+        f"보수율 {info.get('보수율', 0) * 100:.2f}%"
+        f"  ·  배당 {'있음' if info.get('배당') else '없음'}"
     )
 
 
-def _overlap_pick_key(item_idx, dup_idx):
-    return f"overlap_pick_{item_idx}_{dup_idx}"
+def _replace_radio_key(slot_idx):
+    return f"replace_radio_{slot_idx}"
 
 
-def _set_overlap_pick(item_idx, dup_idx, ticker):
-    st.session_state[_overlap_pick_key(item_idx, dup_idx)] = ticker
-
-
-def detect_sector_overlap(selected_etfs):
-    """선택 ETF 중 카테고리 중복 여부를 확인합니다."""
-    category_map = {}
-    overlaps = []
-
-    for ticker in selected_etfs:
-        category = ETF_DATA.get(ticker, {}).get("카테고리", "정보없음")
-        category_map.setdefault(category, []).append(ticker)
-
-    for category, tickers in category_map.items():
-        if len(tickers) > 1:
-            alternatives = [
-                t for t, info in ETF_DATA.items()
-                if info["카테고리"] != category and t not in selected_etfs
-            ][:3]
-            overlaps.append({
-                "중복카테고리": category,
-                "중복ETF": tickers,
-                "대체ETF": alternatives,
-            })
-
-    return overlaps
-
-
-def _apply_overlap_replace(item_idx, dup_idx, dup_ticker):
-    """선택한 대체 ETF로 포트폴리오 중복 종목을 교체합니다."""
-    pick_key = _overlap_pick_key(item_idx, dup_idx)
-    option_ticker = st.session_state.get(pick_key)
-    if not option_ticker or option_ticker == dup_ticker:
+def _apply_etf_replace(slot_idx, old_ticker, replace_options):
+    """같은 카테고리 ETF로만 포트폴리오 종목을 교체합니다."""
+    radio_key = _replace_radio_key(slot_idx)
+    picked_idx = st.session_state.get(radio_key, 0)
+    if not isinstance(picked_idx, int) or picked_idx < 0 or picked_idx >= len(replace_options):
+        picked_idx = 0
+    new_ticker = replace_options[picked_idx]
+    if not new_ticker or new_ticker == old_ticker:
         return
 
-    selected = st.session_state.get("selected_etfs", [])
-    if dup_ticker not in selected:
+    old_category = ETF_DATA.get(old_ticker, {}).get("카테고리")
+    new_category = ETF_DATA.get(new_ticker, {}).get("카테고리")
+    if old_category != new_category:
+        st.session_state[f"replace_error_{slot_idx}"] = (
+            "같은 카테고리 ETF만 선택할 수 있습니다."
+        )
         return
 
-    idx = selected.index(dup_ticker)
-    selected[idx] = option_ticker
+    selected = list(st.session_state.get("selected_etfs", []))
+    if old_ticker not in selected:
+        return
+    if slot_idx >= len(selected) or selected[slot_idx] != old_ticker:
+        slot_idx = selected.index(old_ticker)
+
+    selected[slot_idx] = new_ticker
     st.session_state["selected_etfs"] = selected
 
     etf_weights = st.session_state.get("etf_weights", {})
-    if dup_ticker in etf_weights:
-        etf_weights[option_ticker] = etf_weights.pop(dup_ticker)
+    if old_ticker in etf_weights:
+        etf_weights[new_ticker] = etf_weights.pop(old_ticker)
         st.session_state["etf_weights"] = etf_weights
 
-    st.session_state["overlap_info"] = detect_sector_overlap(selected)
-    st.session_state[f"overlap_replace_msg_{item_idx}_{dup_idx}"] = (
-        f"{dup_ticker} → {option_ticker}로 교체됨"
-    )
+    st.session_state.pop(f"replace_error_{slot_idx}", None)
+    st.session_state[f"replace_msg_{slot_idx}"] = f"{old_ticker} → {new_ticker}로 교체됨"
 
 
 # ============================================================
@@ -615,9 +611,8 @@ def _apply_overlap_replace(item_idx, dup_idx, dup_ticker):
 SIMULATION_BASE_STATS = {
     "지수추적": {"mu": 0.075, "sigma": 0.15},
     "배당형": {"mu": 0.055, "sigma": 0.12},
-    "금융형": {"mu": 0.050, "sigma": 0.10},
+    "커버드콜": {"mu": 0.050, "sigma": 0.10},
     "기술":   {"mu": 0.080, "sigma": 0.18},
-    "안정형": {"mu": 0.020, "sigma": 0.05},
     "레버리지": {"mu": 0.075, "sigma": 0.15},
 }
 
@@ -1130,18 +1125,26 @@ def build_portfolio_weights(etfs, etf_weights=None):
     return {ticker: weight for ticker in etfs}
 
 
+def _max_profile_pct(profile_weights):
+    return max(profile_weights.get(c, 0) for c in AI_PROFILE_CATEGORIES)
+
+
 def build_strategy_reason(profile_weights, selected_etfs, analysis_mode):
     reasons = []
-    if profile_weights["성장형"] >= max(profile_weights.values()):
-        reasons.append("성장형 성향을 반영하여 기술/테크 중심 ETF를 추천합니다.")
-    if profile_weights["배당형"] >= max(profile_weights.values()):
+    top_pct = _max_profile_pct(profile_weights)
+    if profile_weights.get("지수추적", 0) >= top_pct:
+        reasons.append("지수추적 성향을 반영해 시장 지수 ETF를 중심으로 구성했습니다.")
+    if profile_weights.get("배당형", 0) >= top_pct:
         reasons.append("배당 성향이 높아 안정적인 배당 ETF를 포함했습니다.")
-    if profile_weights["금융형"] >= max(profile_weights.values()):
-        reasons.append("금융형 중심 ETF로 포트폴리오 안정성을 보완합니다.")
-    if profile_weights["기술"] >= max(profile_weights.values()):
-        reasons.append("기술 집중 전략으로 성장 기회를 노립니다.")
-    if profile_weights["안정형"] >= max(profile_weights.values()):
-        reasons.append("안정형 비중이 높아 변동성을 낮추는 전략을 권장합니다.")
+    if profile_weights.get("커버드콜", 0) >= top_pct:
+        reasons.append(
+            "커버드콜 성향을 반영해 옵션 프리미엄·월배당형 ETF를 포함했습니다. "
+            "급등 구간에서는 수익이 제한될 수 있습니다."
+        )
+    if profile_weights.get("기술", 0) >= top_pct:
+        reasons.append("기술 성향을 반영해 IT·반도체 섹터 ETF를 포함했습니다.")
+    if profile_weights.get("레버리지", 0) >= top_pct:
+        reasons.append("레버리지 성향이 높아 공격적 수익 추구 ETF를 포함했습니다. 분할매수와 비중 상한을 권장합니다.")
     if analysis_mode == "목표 금액 달성":
         reasons.append("목표 금액 달성을 위해 적절한 월적립 전략을 고려하세요.")
     elif analysis_mode == "목표 기간 확인":
@@ -1261,7 +1264,6 @@ def run_streamlit_app():
         st.session_state["profile_submitted"] = False
         st.session_state["profile_weights"] = None
         st.session_state["selected_etfs"] = []
-        st.session_state["overlap_info"] = []
         st.session_state["analysis_mode"] = ANALYSIS_MODES[0]
         st.session_state["current_capital"] = 10000000.0
         st.session_state["monthly_contribution"] = 100000.0
@@ -1289,21 +1291,28 @@ def run_streamlit_app():
         st.session_state["app_step"] = new_step
         st.rerun()
 
+    def reset_app_to_start():
+        """앱을 최초 실행 상태(STEP1 · Q1)로 되돌립니다."""
+        st.session_state.clear()
+        st.rerun()
+
     def step_button_row(can_next=True, can_prev=True):
-        cols = st.columns([1, 1, 1])
-        if can_prev and cols[0].button("이전", key=f"prev_{current_step}"):
-            move_step(max(1, current_step - 1))
-        cols[1].write("")
+        cols = st.columns([2, 2, 1])
+        if can_prev:
+            nav_cols = cols[0].columns(2)
+            if nav_cols[0].button("이전", key=f"prev_{current_step}"):
+                move_step(max(1, current_step - 1))
+            if nav_cols[1].button("처음으로", key=f"home_{current_step}"):
+                reset_app_to_start()
         if can_next and cols[2].button("다음", key=f"next_{current_step}"):
             move_step(min(6, current_step + 1))
 
     profile_weights = st.session_state.get("profile_weights")
     selected_etfs = st.session_state.get("selected_etfs", [])
-    overlap_info = st.session_state.get("overlap_info", [])
     simulation_results = st.session_state.get("simulation_results")
 
     if current_step == 1:
-        st.write("간단한 질문에 답해 투자 성향을 분석합니다.")
+        st.write("쉬운 질문에 답하면 투자 성향에 맞는 상품 유형을 추천해 드립니다. (종목 코드는 결과 화면에서 확인할 수 있습니다.)")
         
         current_q = st.session_state.get("current_question", "Q1")
         responses = st.session_state.get("profile_responses", {})
@@ -1320,76 +1329,77 @@ def run_streamlit_app():
             
             # 분석 결과 표시
             st.write("### 투자 성향 분석 결과")
-            cols = st.columns(5)
-            for i, (cat, pct) in enumerate(profile_weights.items()):
-                with cols[i]:
-                    st.metric(cat, f"{pct}%")
+            render_profile_metrics(profile_weights)
             
             if st.button("STEP2로 이동", key="proceed_to_step2"):
                 st.session_state["app_step"] = 2
                 st.rerun()
         else:
-            # 질문 표시
+            q_data = AI_PROFILE_QUESTIONS[current_q]
+            is_multi = _is_multi_select_question(current_q)
+
             st.write(q_text)
-            
-            # 진행 상황 계산 (정확하게)
-            # 현재까지 응답한 질문 개수
+            if current_q == "Q7":
+                with st.expander("💡 커버드콜이란? (자세히 보기)"):
+                    st.markdown(COVERED_CALL_EXPLANATION)
+
             completed = len(responses)
-            
-            # 전체 질문 개수 결정
-            if "Q5" in AI_PROFILE_QUESTIONS and responses.get("Q4") == 2:
-                # Q5가 포함될 경우
-                total_questions = len(AI_PROFILE_BASE_QUESTIONS) + 1
-            else:
-                # Q5가 미포함될 경우
-                total_questions = len(AI_PROFILE_BASE_QUESTIONS)
-            
+            total_questions = count_total_profile_questions(responses)
             st.write(f"진행 상황: {completed}/{total_questions}")
-            
-            # 선택지 표시 (라디오 버튼)
-            selected_idx = st.radio(
-                "선택지",
-                range(len(q_choices)),
-                format_func=lambda i: q_choices[i],
-                key=f"choice_{current_q}"
-            )
-            
-            # 이전/다음 버튼
-            cols = st.columns([1, 1, 1])
-            
-            # 이전 버튼
-            with cols[0]:
-                if st.button("이전", key="q_prev"):
-                    # 현재 질문의 응답 삭제 (뒤로 갔을 때 진행상황 업데이트)
-                    if current_q in st.session_state["profile_responses"]:
-                        del st.session_state["profile_responses"][current_q]
-                    
-                    # 현재 질문 이전으로 돌아가기
-                    all_questions = AI_PROFILE_BASE_QUESTIONS.copy()
-                    # Q5가 응답에 있으면 포함
-                    if "Q5" in st.session_state["profile_responses"]:
-                        all_questions.insert(all_questions.index("Q6"), "Q5")
-                    
-                    try:
-                        current_idx = all_questions.index(current_q)
-                        if current_idx > 0:
-                            prev_q = all_questions[current_idx - 1]
-                            st.session_state["current_question"] = prev_q
-                            st.rerun()
-                    except ValueError:
-                        pass
-            
-            # 다음 버튼
+
+            if is_multi:
+                max_select = q_data.get("max_select", PROFILE_MULTI_SELECT_MAX)
+                st.caption(f"해당되는 항목을 **최소 1개, 최대 {max_select}개**까지 선택하세요.")
+                saved = responses.get(current_q, [])
+                if not isinstance(saved, list):
+                    saved = []
+                selected_indices = st.multiselect(
+                    "선택 (복수)",
+                    options=list(range(len(q_choices))),
+                    default=saved,
+                    format_func=lambda i: q_choices[i],
+                    max_selections=max_select,
+                    key=f"choice_{current_q}",
+                    label_visibility="collapsed",
+                )
+            else:
+                selected_indices = st.radio(
+                    "선택지",
+                    range(len(q_choices)),
+                    format_func=lambda i: q_choices[i],
+                    index=responses.get(current_q, 0) if current_q in responses else 0,
+                    key=f"choice_{current_q}",
+                )
+
+            cols = st.columns([2, 2, 1])
+            nav_cols = cols[0].columns(2)
+            if nav_cols[0].button("이전", key="q_prev"):
+                if current_q in st.session_state["profile_responses"]:
+                    del st.session_state["profile_responses"][current_q]
+                question_order = get_profile_question_order(st.session_state["profile_responses"])
+                try:
+                    current_idx = question_order.index(current_q)
+                    if current_idx > 0:
+                        st.session_state["current_question"] = question_order[current_idx - 1]
+                        st.rerun()
+                except ValueError:
+                    pass
+            if nav_cols[1].button("처음으로", key="q_home"):
+                reset_app_to_start()
+
             with cols[2]:
                 if st.button("다음", key="q_next"):
-                    # 현재 선택지 저장
-                    st.session_state["profile_responses"][current_q] = selected_idx
-                    
-                    # 다음 질문 결정
+                    if is_multi:
+                        if not selected_indices:
+                            st.warning("최소 1개 이상 선택해 주세요.")
+                            st.stop()
+                        st.session_state["profile_responses"][current_q] = list(selected_indices)
+                    else:
+                        st.session_state["profile_responses"][current_q] = selected_indices
+
                     next_q = get_next_question(current_q, st.session_state["profile_responses"])
-                    
+
                     if next_q is None:
-                        # 모든 질문 완료 - 프로필 계산
                         profile_weights = calculate_profile_scores(st.session_state["profile_responses"])
                         st.session_state["profile_weights"] = profile_weights
                         st.session_state["profile_submitted"] = True
@@ -1412,20 +1422,20 @@ def run_streamlit_app():
             etf_weights = recommend_etfs_with_weights(profile_weights, top_n=5)
             st.session_state["etf_weights"] = etf_weights
             st.session_state["selected_etfs"] = selected_etfs
-            st.session_state["overlap_info"] = detect_sector_overlap(selected_etfs)
-            overlap_info = st.session_state["overlap_info"]
         else:
             etf_weights = st.session_state.get("etf_weights", {})
-        
+
         # 투자 성향 분석 결과 표시
         st.write("### 📊 당신의 투자 성향")
-        visible_categories = [cat for cat in profile_weights if cat != "_leverage_score"]
-        cols = st.columns(len(visible_categories))
-        for i, cat in enumerate(visible_categories):
-            pct = profile_weights[cat]
-            with cols[i]:
-                st.metric(cat, f"{pct}%")
-        
+        render_profile_metrics(profile_weights)
+
+        if profile_weights.get("커버드콜", 0) >= 15:
+            st.info(
+                f"커버드콜 성향이 **{profile_weights.get('커버드콜', 0):.1f}%**입니다. "
+                "월배당·프리미엄 수익을 노리는 ETF가 포함될 수 있습니다. "
+                "위 **「커버드콜이란?」** 안내를 참고해 주세요."
+            )
+
         st.markdown("---")
         
         st.write("### 🎯 추천 포트폴리오 (5개 ETF)")
@@ -1465,93 +1475,108 @@ def run_streamlit_app():
                 with col1:
                     st.write("**기본 정보**")
                     st.write(f"• **카테고리**: {info.get('카테고리', '')}")
+                    if info.get("카테고리") == "커버드콜":
+                        st.caption(
+                            "콜옵션 매도로 프리미엄(월배당 등)을 받는 전략. "
+                            "급등 시 주가 상승 이익은 제한될 수 있습니다."
+                        )
                     st.write(f"• **보수율**: {info.get('보수율', 0)*100:.2f}%")
                     st.write(f"• **배당**: {'있음 💰' if info.get('배당') else '없음'}")
                     st.write(f"• **레버리지**: {'3배 🚀' if info.get('레버리지') else '없음'}")
                 
                 with col2:
                     st.write("**설명**")
-                    descriptions = {
-                        "VOO": "S&P 500 (미국 500대 기업)\n안정적 성장형의 대표",
-                        "QQQ": "나스닥 100 (미국 기술기업)\n기술주 중심 성장형",
-                        "VTI": "미국 전체 주식시장\n최대 분산의 지수 추적",
-                        "SCHD": "배당성장 ETF\n안정적 배당 수익",
-                        "DGRO": "배당성장 ETF\n매년 배당금 증가",
-                        "VYM": "고배당 수익 ETF\n높은 배당 수익률",
-                        "JEPI": "월배당 프리미엄 인컴 ETF\n매월 배당금 수령",
-                        "JEPQ": "나스닥 월배당 ETF\n기술주 + 월배당",
-                        "QYLD": "나스닥 월배당 커버드콜\n높은 월 배당 수익",
-                        "QLD": "나스닥 2배 레버리지\n2배 수익/손실",
-                        "TQQQ": "나스닥 3배 레버리지\n3배 수익/손실 (위험 높음)",
-                        "SSO": "S&P500 2배 레버리지\n2배 수익/손실",
-                        "UPRO": "S&P500 3배 레버리지\n3배 수익/손실 (위험 높음)",
-                        "SOXL": "반도체 3배 레버리지\n반도체 + 3배 수익/손실 (최고 위험)",
-                        "VGT": "기술섹터 종합 ETF\n다양한 IT기업 투자",
-                        "SOXX": "반도체 전문 ETF\nNVIDIA, TSMC 등",
-                        "SMH": "반도체 전문 ETF\nIntel, Broadcom 등",
-                        "DRAM": "반도체 메모리 전문\nDRAM, NAND 기업",
-                        "XLV": "헬스케어 섹터 ETF\n의약품, 의료기기 기업",
-                        "SGOV": "초단기 미국채 ETF\n극도로 안전한 자산"
-                    }
-                    st.write(descriptions.get(ticker, ""))
+                    st.write(ETF_SUMMARY_DESCRIPTIONS.get(ticker, ""))
         
         st.markdown("---")
-        
-        if overlap_info:
-            st.warning("⚠️ 섹터/카테고리가 중복되는 ETF가 있습니다.")
-            st.caption("교체할 **카드를 눌러** 선택한 뒤, 하단 **선택한 ETF로 교체** 버튼을 누르세요.")
-            _inject_overlap_card_button_css()
 
-            for item_idx, item in enumerate(overlap_info):
-                duplicate_etfs = item["중복ETF"]
-                alternative_etfs = item["대체ETF"]
+        st.write("### 🔄 종목 교체")
+        st.caption(
+            "교체는 **같은 카테고리** ETF끼리만 가능합니다. "
+            "아래 목록에서 종목을 고른 뒤 **선택한 ETF로 교체**를 누르세요."
+        )
+        st.markdown(
+            """
+            <style>
+            /* 종목 교체 라디오: 한 줄씩 넓게, 줄바꿈 유지 */
+            div[data-testid="stRadio"] label {
+                white-space: pre-line !important;
+                line-height: 1.55 !important;
+                padding: 0.65rem 0.25rem !important;
+                align-items: flex-start !important;
+            }
+            div[data-testid="stRadio"] label p {
+                white-space: pre-line !important;
+                line-height: 1.55 !important;
+                margin: 0 !important;
+            }
+            div[data-testid="stRadio"] > div {
+                gap: 0.15rem !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
-                st.subheader(f"📌 {item['중복카테고리']} 중복 감지")
+        for slot_idx, current_ticker in enumerate(selected_etfs):
+            category = ETF_DATA.get(current_ticker, {}).get("카테고리", "")
+            replace_options = get_same_category_replacement_options(current_ticker, selected_etfs)
+            radio_key = _replace_radio_key(slot_idx)
 
-                for dup_idx, dup_ticker in enumerate(duplicate_etfs):
-                    pick_key = _overlap_pick_key(item_idx, dup_idx)
-                    all_options = [dup_ticker] + alternative_etfs
+            st.subheader(f"📌 {current_ticker} · {category}")
+            st.write(f"포트폴리오 **{slot_idx + 1}번** 종목 — 같은 카테고리 ETF 중에서 선택")
 
-                    if pick_key not in st.session_state:
-                        default_pick = alternative_etfs[0] if alternative_etfs else dup_ticker
-                        st.session_state[pick_key] = default_pick
+            if len(replace_options) <= 1:
+                st.info(f"**{category}** 카테고리에 선택 가능한 다른 ETF가 없습니다.")
+                st.markdown("---")
+                continue
 
-                    picked_ticker = st.session_state[pick_key]
-                    st.write(f"**중복 ETF: {dup_ticker}** → 교체할 카드를 클릭해 선택하세요.")
+            if radio_key not in st.session_state:
+                default_idx = 1 if len(replace_options) > 1 else 0
+                st.session_state[radio_key] = default_idx
+            elif st.session_state[radio_key] >= len(replace_options):
+                st.session_state[radio_key] = 0
 
-                    cols = st.columns(min(4, len(all_options)))
-                    for col_idx, option_ticker in enumerate(all_options):
-                        with cols[col_idx % len(cols)]:
-                            is_picked = picked_ticker == option_ticker
-                            wrapper_class = "overlap-card-selected" if is_picked else ""
-                            st.markdown(f'<div class="overlap-card-grid {wrapper_class}">', unsafe_allow_html=True)
-                            _render_overlap_card_selector(item_idx, dup_idx, option_ticker, is_picked)
-                            st.markdown("</div>", unsafe_allow_html=True)
+            picked_idx = st.radio(
+                "교체할 ETF",
+                options=list(range(len(replace_options))),
+                format_func=lambda i, opts=replace_options, cur=current_ticker: _format_replace_option_label(
+                    opts[i], cur
+                ),
+                key=radio_key,
+                label_visibility="collapsed",
+            )
+            picked_ticker = replace_options[picked_idx]
 
-                    msg_key = f"overlap_replace_msg_{item_idx}_{dup_idx}"
-                    if msg_key in st.session_state:
-                        st.success(f"✅ {st.session_state.pop(msg_key)}")
+            error_key = f"replace_error_{slot_idx}"
+            if error_key in st.session_state:
+                st.error(st.session_state.pop(error_key))
 
-                    picked_label = picked_ticker
-                    replace_disabled = picked_ticker == dup_ticker
-                    if st.button(
-                        "선택한 ETF로 교체",
-                        key=f"overlap_apply_{item_idx}_{dup_idx}",
-                        type="primary",
-                        use_container_width=True,
-                        disabled=replace_disabled,
-                        help="선택한 카드의 ETF로 중복 종목을 교체합니다.",
-                    ):
-                        _apply_overlap_replace(item_idx, dup_idx, dup_ticker)
-                        st.rerun()
+            msg_key = f"replace_msg_{slot_idx}"
+            if msg_key in st.session_state:
+                st.success(f"✅ {st.session_state.pop(msg_key)}")
 
-                    if replace_disabled:
-                        st.caption("현재 포트폴리오에 있는 중복 ETF와 동일합니다. 다른 카드를 선택해 주세요.")
-                    else:
-                        st.caption(f"선택됨: **{picked_label}** → **{dup_ticker}** 자리에 반영됩니다.")
+            replace_disabled = picked_ticker == current_ticker
+            if st.button(
+                "선택한 ETF로 교체",
+                key=f"replace_apply_{slot_idx}",
+                type="primary",
+                use_container_width=True,
+                disabled=replace_disabled,
+                help="같은 카테고리 ETF로만 교체됩니다.",
+            ):
+                _apply_etf_replace(slot_idx, current_ticker, replace_options)
+                st.rerun()
 
-                    st.markdown("---")
-        
+            if replace_disabled:
+                st.caption("현재 보유 종목과 같습니다. 목록에서 다른 ETF를 선택해 주세요.")
+            else:
+                st.caption(
+                    f"선택됨: **{picked_ticker}** → **{current_ticker}** 자리에 반영됩니다."
+                )
+
+            st.markdown("---")
+
         step_button_row()
 
     elif current_step == 5:
@@ -1697,16 +1722,16 @@ def run_streamlit_app():
             buy_reason = "중간 수준 변동성으로 일부는 일시투자, 일부는 DCA를 권장합니다."
 
         # 리밸런싱 주기 추천
-        dominant = max(profile_weights, key=lambda k: profile_weights.get(k, 0))
-        if dominant in ["기술", "성장형"]:
+        dominant = max(AI_PROFILE_CATEGORIES, key=lambda k: profile_weights.get(k, 0))
+        if dominant in ["기술", "지수추적", "레버리지"]:
             rebalance_rec = "분기"
-            rebalance_reason = "성장/기술 중심이면 더 자주 리밸런싱하여 비중 관리를 권장합니다."
-        elif dominant in ["배당형", "금융형"]:
+            rebalance_reason = "지수추적·기술·레버리지 비중이 높으면 더 자주 리밸런싱하여 비중 관리를 권장합니다."
+        elif dominant in ["배당형", "커버드콜"]:
             rebalance_rec = "반기"
-            rebalance_reason = "배당/금융형은 반기 리밸런싱으로 배당 수익과 안정성 균형을 맞추기 좋습니다."
+            rebalance_reason = "배당형·커버드콜 비중이 높으면 반기 리밸런싱으로 현금흐름과 비중 균형을 맞추기 좋습니다."
         else:
             rebalance_rec = "연간"
-            rebalance_reason = "안정형 비중이 높으면 연간 리밸런싱으로 트랜잭션 비용을 절감하세요."
+            rebalance_reason = "연간 리밸런싱으로 트랜잭션 비용을 절감할 수 있습니다."
 
         # 추가 권장 이유 텍스트
         strategy_reasons = build_strategy_reason(profile_weights, selected_etfs, st.session_state.get("analysis_mode"))
@@ -1921,13 +1946,12 @@ def run_streamlit_app():
         st.plotly_chart(plot_growth_curves(simulation_results["path_curves"], years=st.session_state["years"]), use_container_width=True)
         st.plotly_chart(plot_mode_comparison(simulation_results["mode_paths"], years=st.session_state["years"]), use_container_width=True)
         st.plotly_chart(plot_rebalance_comparison(simulation_results["rebalance_summary"]), use_container_width=True)
-        cols = st.columns([1, 1, 1])
-        if cols[0].button("이전", key="prev_6"):
+        cols = st.columns([2, 2, 1])
+        nav_cols = cols[0].columns(2)
+        if nav_cols[0].button("이전", key="prev_6"):
             move_step(5)
-        cols[1].write("")
-        if cols[2].button("처음으로", key="restart"):
-            st.session_state.clear()
-            st.rerun()
+        if nav_cols[1].button("처음으로", key="home_6"):
+            reset_app_to_start()
 
 
 if __name__ == "__main__":
