@@ -9,6 +9,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
 
 load_dotenv()
 
@@ -36,29 +40,26 @@ ETF_DATA = {
     "SSO":  {"이름": "ProShares Ultra S&P500",              "카테고리": "레버리지", "보수율": 0.0087, "배당": False, "레버리지": True},
     "UPRO": {"이름": "ProShares UltraPro S&P500",           "카테고리": "레버리지", "보수율": 0.0089, "배당": False, "레버리지": True},
     "SOXL": {"이름": "Direxion Daily Semiconductor Bull 3X", "카테고리": "레버리지", "보수율": 0.0075, "배당": False, "레버리지": True},
-    "VGT":  {"이름": "Vanguard Information Technology ETF", "카테고리": "기술",     "보수율": 0.0009, "배당": True,  "레버리지": False},
-    "SOXX": {"이름": "iShares Semiconductor ETF",           "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "SMH":  {"이름": "VanEck Semiconductor ETF",            "카테고리": "기술",     "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "DRAM": {"이름": "Roundhill Memory ETF",                "카테고리": "기술",     "보수율": 0.0065, "배당": True,  "레버리지": False},
 }
 
 # ============================================================
 # 섹션 2. AI 성향 분석 함수
 # ============================================================
 
-AI_PROFILE_CATEGORIES = ["지수추적", "배당형", "커버드콜", "기술", "레버리지"]
+AI_PROFILE_CATEGORIES = ["지수추적", "배당형", "커버드콜", "레버리지"]
 
 # 포트폴리오 내 레버리지 ETF 비중 상한 (0~1)
 LEVERAGE_MAX_PORTFOLIO_WEIGHT = 0.30
 
 COVERED_CALL_EXPLANATION = """
-**커버드콜** 은 이미 보유한 주식(또는 주식 묶음 상품)에 대해 **콜옵션을 매도**해 옵션료(프리미엄)를 받는 전략입니다.
+**커버드콜**은 쉽게 말해, 보유한 자산에서 나오는 일부 상승 기회를 대신해
+매달 비교적 규칙적인 현금흐름(프리미엄)을 기대하는 방식입니다.
 
-- **어떻게 수익이 나나요?** → 옵션 매수자에게 받은 프리미엄이 **배당처럼 현금흐름**으로 들어옵니다. 월배당형 일부 상품이 이 방식을 씁니다.
-- **장점** → 시장이 보합·완만한 상승일 때 **월배당 등 현금흐름**을 노리기 좋습니다.
-- **단점** → 주가가 **급등**하면 옵션 때문에 상승 이익이 **제한**될 수 있고, **하락장**에서는 주식 손실은 그대로입니다.
+- **어떻게 수익이 나나요?** → 월수익처럼 들어오는 추가 현금흐름을 노립니다.
+- **장점** → 시장이 크게 오르지 않는 구간에서 꾸준한 흐름을 기대하기 좋습니다.
+- **단점** → 시장이 급등하면 상승 수익 일부를 놓칠 수 있고, 하락 시 손실 위험은 남습니다.
 
-즉, “큰 상승보다 **꾸준한 현금흐름**”을 택하는 투자 성향에 가깝습니다.
+즉, “크게 한 번 벌기”보다 “꾸준히 받기”에 가까운 성향입니다.
 """
 
 PROFILE_METRIC_HELP = {
@@ -77,52 +78,52 @@ AI_PROFILE_QUESTIONS = {
     "Q1": {
         "text": (
             "1단계: 투자 가치관\n\n"
-            "**Q1. 주식 투자에서 가장 가깝게 느껴지는 목표는?**"
+            "**Q1. 투자할 때 가장 중요한 목표는 무엇인가요?**"
         ),
         "choices": [
-            "① 안정과 꾸준한 현금흐름(배당·월수익)이 중요하다.",
-            "② 시장 전체 성장에 참여하고, 종목 고르기는 단순했으면 한다.",
-            "③ 기술·반도체 등 성장 산업의 upside에 투자하고 싶다.",
-            "④ 수익 극대화를 위해 변동성·위험도 감수할 수 있다.",
+            "① 원금이 크게 흔들리지 않고, 꾸준한 수익이 나면 좋겠다.",
+            "② 어렵게 고르지 않고, 시장 평균 흐름을 따라가고 싶다.",
+            "③ 큰 수익보다 매달 들어오는 현금흐름이 더 중요하다.",
+            "④ 손실 위험이 커도 높은 수익을 노리고 싶다.",
         ],
         "scores": [
             {"배당형": 2, "커버드콜": 2},
             {"지수추적": 3},
-            {"기술": 3},
-            {"레버리지": 2, "기술": 1},
+            {"커버드콜": 2, "배당형": 1},
+            {"레버리지": 3},
         ],
     },
     "Q2": {
         "text": (
             "2단계: 포트폴리오 스타일\n\n"
-            "**Q2. 포트폴리오를 꾸릴 때 나에게 더 맞는 방식은?**"
+            "**Q2. 투자 방법으로 더 마음이 가는 쪽은 어느 쪽인가요?**"
         ),
         "choices": [
-            "① 넓게 분산 — 한두 종목에 올인하기보다 여러 자산에 나눈다.",
-            "② 시장 지수 — 미국 주식 시장 전체를 한 번에 담는 방식이 좋다.",
-            "③ 섹터 집중 — 잘 아는 분야(기술·반도체 등)에 비중을 둔다.",
-            "④ 전략 집중 — 익숙한 전략(배당·커버드콜·레버리지)을 적극 활용한다.",
+            "① 여러 기업에 넓게 나눠 담아 위험을 줄이고 싶다.",
+            "② 대표 기업들을 한 번에 담는 단순한 방식이 좋다.",
+            "③ 매달 들어오는 수익이 있는 구성이 마음이 편하다.",
+            "④ 변동이 커도 수익 기회가 크면 적극적으로 시도하고 싶다.",
         ],
         "scores": [
             {"배당형": 1, "지수추적": 2},
             {"지수추적": 3},
-            {"기술": 3},
+            {"커버드콜": 2, "배당형": 1},
             {"커버드콜": 1, "레버리지": 2, "배당형": 1},
         ],
     },
     "Q3": {
         "text": (
             "3단계: 수익 매력\n\n"
-            "**Q3. 투자 수익으로 더 끌리는 것은?**"
+            "**Q3. 어떤 수익 방식이 더 좋나요?**"
         ),
         "choices": [
-            "① 주가 상승(자본 이득) — 기업이 커지며 오르는 수익",
-            "② 현금 수익 — 배당·이자·월배당처럼 들어오는 돈",
-            "③ 성장이 조금 더 중요하지만, 현금흐름도 무시하지 않는다.",
-            "④ 현금흐름이 조금 더 중요하지만, 성장 기회도 놓치고 싶지 않다.",
+            "① 시간이 지나며 자산 가격이 오르는 수익",
+            "② 정기적으로 통장에 들어오는 현금 수익",
+            "③ 성장 수익이 조금 더 중요하지만, 현금 수익도 원한다.",
+            "④ 현금 수익이 조금 더 중요하지만, 성장 수익도 원한다.",
         ],
         "scores": [
-            {"지수추적": 2, "기술": 1},
+            {"지수추적": 2, "레버리지": 1},
             {"배당형": 2, "커버드콜": 2},
             {"지수추적": 2, "배당형": 1},
             {"배당형": 2, "커버드콜": 1, "지수추적": 1},
@@ -131,27 +132,27 @@ AI_PROFILE_QUESTIONS = {
     "Q4": {
         "text": (
             "4단계: 위험 감수 (중요)\n\n"
-            "**Q4. 1,000만 원 투자 후 한 달 만에 30% 손실이 났다면?**"
+            "**Q4. 1,000만 원을 투자했는데 한 달 뒤 700만 원이 되었다면?**"
         ),
         "choices": [
-            "① 매우 불안하다. 손실을 줄이는 쪽(안정·현금흐름)으로 옮기고 싶다.",
-            "② 속상하지만 장기 우상향을 믿고 버틴다.",
-            "③ 오히려 저가 매수 기회로 보고 추가 매수를 고려한다.",
+            "① 너무 불안하다. 더 안정적인 쪽으로 옮기고 싶다.",
+            "② 걱정되지만 당장 팔지 않고 더 지켜본다.",
+            "③ 오히려 기회라고 보고 추가 매수도 생각한다.",
         ],
         "scores": [
             {"배당형": 3, "커버드콜": 1},
             {"지수추적": 2, "배당형": 1},
-            {"지수추적": 2, "레버리지": 2, "기술": 1},
+            {"지수추적": 2, "레버리지": 2},
         ],
         "follow_up": {2: "Q5"},
     },
     "Q5": {
         "text": (
-            "**Q5. (심화) 예상과 반대로 갈 때, 하루 수익·손실이 3배로 움직이는 상품도 감당할 수 있나요?**"
+            "**Q5. (심화) 가격이 더 크게 오르내리는 고위험 상품도 감당할 수 있나요?**"
         ),
         "choices": [
-            "① 3배는 부담된다. 일반 지수·분산 쪽이 낫다.",
-            "② 감수할 수 있다. 수익을 위해 레버리지도 고려한다.",
+            "① 어렵다. 변동이 덜한 상품이 좋다.",
+            "② 가능하다. 위험이 커도 높은 수익을 노려볼 수 있다.",
         ],
         "scores": [
             {"지수추적": 1},
@@ -160,16 +161,16 @@ AI_PROFILE_QUESTIONS = {
     },
     "Q6": {
         "text": (
-            "5단계: 시장 vs 섹터\n\n"
-            "**Q6. 미국 주식 투자 시 더 끌리는 접근은?**"
+            "5단계: 시장 vs 현금흐름\n\n"
+            "**Q6. 미국 주식에 투자한다면 어떤 방식이 더 편한가요?**"
         ),
         "choices": [
-            "① 미국 주식 시장 전체에 골고루 분산",
-            "② AI·반도체·IT 등 기술 성장에 베팅",
+            "① 시장 전체에 넓게 나눠 담는 방식",
+            "② 배당/월수익처럼 현금흐름을 챙기는 방식",
         ],
         "scores": [
             {"지수추적": 3},
-            {"기술": 3},
+            {"배당형": 2, "커버드콜": 1},
         ],
     },
     "Q7": {
@@ -177,43 +178,25 @@ AI_PROFILE_QUESTIONS = {
         "max_select": PROFILE_MULTI_SELECT_MAX,
         "text": (
             "6단계: 관심 상품 유형 (복수 선택)\n\n"
-            f"**Q7. 포트폴리오에 넣고 싶은 상품 유형을 골라 주세요. (최대 {PROFILE_MULTI_SELECT_MAX}개)**\n\n"
+            f"**Q7. 아래 중 관심 있는 투자 유형을 골라 주세요. (최대 {PROFILE_MULTI_SELECT_MAX}개)**\n\n"
             "해당되는 것만 고르세요. 전부 고르지 않아도 됩니다."
         ),
         "choices": [
-            "① 시장 지수 따라가기 (미국 대형주·전체 시장 등)",
-            "② 배당 중심 (정기적으로 배당금 받기)",
-            "③ 월배당·커버드콜 (매달 현금흐름 위주)",
-            "④ 기술·반도체 (IT·칩 관련 기업)",
-            "⑤ 레버리지 (하루 단위로 수익·손실이 2~3배로 움직이는 상품)",
+            "① 대표 기업들을 넓게 담아 시장 흐름 따라가기",
+            "② 배당 중심으로 정기 수익 받기",
+            "③ 매달 현금흐름 중심(커버드콜 포함)",
+            "④ 변동이 큰 고위험·고수익 상품",
         ],
         "scores": [
             {"지수추적": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
             {"배당형": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
             {"커버드콜": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
-            {"기술": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
             {"레버리지": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
-        ],
-    },
-    "Q8": {
-        "text": (
-            "7단계: 기술 섹터 세부\n\n"
-            "**Q8. 기술·반도체 투자 시 선호하는 집중도는?**"
-        ),
-        "choices": [
-            "① 기술/IT 전체에 분산 (빅테크·소프트웨어·하드웨어)",
-            "② 반도체 기업에 집중",
-            "③ 반도체 + 높은 변동(레버리지)까지 추구",
-        ],
-        "scores": [
-            {"기술": 2},
-            {"기술": 3},
-            {"기술": 2, "레버리지": 2},
         ],
     },
 }
 
-AI_PROFILE_BASE_QUESTIONS = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]
+AI_PROFILE_BASE_QUESTIONS = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7"]
 
 
 def get_profile_question_order(responses):
@@ -253,7 +236,7 @@ def _is_multi_select_question(q_key):
 
 
 def calculate_profile_scores(responses):
-    """사용자 응답을 기반으로 5개 투자 성향 카테고리별 점수(%)를 계산합니다."""
+    """사용자 응답을 기반으로 4개 투자 성향 카테고리별 점수(%)를 계산합니다."""
     scores = {cat: 0 for cat in AI_PROFILE_CATEGORIES}
 
     for q_key, answer in responses.items():
@@ -286,7 +269,7 @@ def calculate_profile_scores(responses):
         profile = {cat: round((scores[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
 
     leverage_from_q5 = responses.get("Q5") == 1 if "Q5" in responses else None
-    leverage_from_q7 = 4 in responses.get("Q7", []) if isinstance(responses.get("Q7"), list) else False
+    leverage_from_q7 = 3 in responses.get("Q7", []) if isinstance(responses.get("Q7"), list) else False
     if leverage_from_q5 is not None:
         profile["_leverage_allowed"] = leverage_from_q5
     else:
@@ -325,13 +308,12 @@ CATEGORY_TO_ETFS = {
     "지수추적": ["VOO", "QQQ", "VTI"],
     "배당형": ["SCHD", "DGRO", "VYM"],
     "커버드콜": ["JEPI", "JEPQ", "QYLD"],
-    "기술": ["VGT", "SOXX", "SMH", "DRAM"],
     "레버리지": ["TQQQ", "UPRO", "SOXL", "QLD", "SSO"],
 }
 
 
 def _normalize_profile_weights(profile_weights):
-    """5개 투자 성향 카테고리 비중을 0~1로 정규화합니다."""
+    """4개 투자 성향 카테고리 비중을 0~1로 정규화합니다."""
     regular_weights = {cat: float(profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES}
     if not profile_weights.get("_leverage_allowed", True):
         regular_weights["레버리지"] = 0
@@ -390,7 +372,7 @@ def _cap_leverage_weights(weights, max_share=LEVERAGE_MAX_PORTFOLIO_WEIGHT):
 
 
 def recommend_etfs_with_weights(profile_weights, top_n=5):
-    """투자 성향 비율(5축)을 받아 ETF와 비중을 함께 추천합니다.
+    """투자 성향 비율(4축)을 받아 ETF와 비중을 함께 추천합니다.
 
     반환: {ticker: weight} 딕셔너리
     """
@@ -486,14 +468,206 @@ ETF_SUMMARY_DESCRIPTIONS = {
     "SSO": "미국 대형주 지수 · 2배 레버리지",
     "UPRO": "미국 대형주 지수 · 3배 레버리지",
     "SOXL": "반도체 · 3배 레버리지",
-    "VGT": "미국 IT·기술 기업 묶음",
-    "SOXX": "반도체 기업 묶음",
-    "SMH": "반도체 기업 묶음",
-    "DRAM": "반도체 메모리 기업 집중",
 }
 
 # 카드 UI 등에서 사용 (ETF_SUMMARY_DESCRIPTIONS와 동일)
 ETF_CARD_DESCRIPTIONS = ETF_SUMMARY_DESCRIPTIONS
+
+CATEGORY_DISPLAY_LABELS = {
+    "지수추적": "지수추종형",
+    "배당형": "배당형",
+    "커버드콜": "커버드콜형",
+    "레버리지": "레버리지형",
+}
+
+ETF_DETAIL_GUIDE = {
+    "VOO": {
+        "intro": "미국을 대표하는 대형 기업 500개에 한 번에 분산 투자하는 상품입니다. 미국 경제 성장 흐름을 비교적 단순하게 따라가고 싶을 때 자주 선택됩니다.",
+        "recommended_for": [
+            "ETF를 처음 시작하는 분",
+            "종목 선택보다 시장 전체 흐름에 투자하고 싶은 분",
+        ],
+        "top_holdings": ["Apple", "Microsoft", "NVIDIA"],
+        "caution": "시장 전체가 하락하면 함께 떨어질 수 있어 단기보다 장기 관점이 더 적합합니다.",
+    },
+    "QQQ": {
+        "intro": "미국 기술 대형주 중심의 대표 지수를 추종합니다. 성장성이 큰 만큼 변동성도 더 큰 편입니다.",
+        "recommended_for": [
+            "기술 성장주 비중을 높이고 싶은 분",
+            "중장기 성장 수익을 우선하는 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
+        "caution": "기술주 조정 구간에서는 하락 폭이 크게 나올 수 있어 분할매수가 유리합니다.",
+    },
+    "VTI": {
+        "intro": "미국 주식시장 거의 전체를 담아 매우 넓게 분산되는 상품입니다. 한 상품으로 시장 전반에 투자하기 쉽습니다.",
+        "recommended_for": [
+            "최대한 넓게 분산하고 싶은 분",
+            "장기 적립식 투자를 선호하는 분",
+        ],
+        "top_holdings": ["Apple", "Microsoft", "NVIDIA"],
+        "caution": "시장 전반이 약세일 때는 방어력이 제한될 수 있습니다.",
+    },
+    "SCHD": {
+        "intro": "재무 건전성과 배당 지속성이 높은 기업 위주로 구성된 배당 성장형 상품입니다.",
+        "recommended_for": [
+            "배당 + 장기 성장의 균형을 원하는 분",
+            "현금흐름도 챙기고 싶은 분",
+        ],
+        "top_holdings": ["Coca-Cola", "Home Depot", "Cisco"],
+        "caution": "고성장 구간에서는 기술 성장주 대비 수익이 낮게 보일 수 있습니다.",
+    },
+    "DGRO": {
+        "intro": "배당이 꾸준히 늘어난 기업을 중심으로 구성되어 장기적으로 배당 성장 흐름을 노리는 상품입니다.",
+        "recommended_for": [
+            "배당 성장 기업에 투자하고 싶은 분",
+            "안정성과 성장의 균형을 중시하는 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "JPMorgan"],
+        "caution": "배당 성장 전략 특성상 급등장에서 상대 수익이 낮을 수 있습니다.",
+    },
+    "VYM": {
+        "intro": "배당수익률이 상대적으로 높은 미국 대형주에 분산 투자하는 고배당 성격의 상품입니다.",
+        "recommended_for": [
+            "정기적인 배당 흐름을 선호하는 분",
+            "변동성을 조금 낮추고 싶은 분",
+        ],
+        "top_holdings": ["Broadcom", "JPMorgan", "Exxon Mobil"],
+        "caution": "금리와 경기 흐름에 따라 배당주가 약세를 보일 수 있습니다.",
+    },
+    "JEPI": {
+        "intro": "주식 포지션에 옵션 전략을 결합해 월 단위 현금흐름을 추구하는 커버드콜 상품입니다.",
+        "recommended_for": [
+            "매달 들어오는 수익 흐름이 중요한 분",
+            "큰 급등보다 안정적 흐름을 선호하는 분",
+        ],
+        "top_holdings": ["Trane", "Progressive", "Meta"],
+        "caution": "강한 상승장에서는 주가 상승 이익 일부를 놓칠 수 있습니다.",
+    },
+    "JEPQ": {
+        "intro": "기술 대형주 기반에 커버드콜 전략을 적용해 현금흐름을 강화한 상품입니다.",
+        "recommended_for": [
+            "기술주 노출 + 월수익을 같이 원하는 분",
+            "배당형보다 높은 변동성도 감수 가능한 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
+        "caution": "기술주 변동성과 옵션 구조 영향으로 가격이 빠르게 출렁일 수 있습니다.",
+    },
+    "QYLD": {
+        "intro": "기술 지수 기반 커버드콜 전략으로 월수익 흐름을 우선하는 성격의 상품입니다.",
+        "recommended_for": [
+            "현금흐름 우선 투자자",
+            "가격 상승보다 월배당 성향을 선호하는 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
+        "caution": "장기 총수익은 성장주 중심 상품보다 낮아질 수 있습니다.",
+    },
+    "QLD": {
+        "intro": "기술 지수의 일일 움직임을 2배로 추종하는 레버리지 상품입니다.",
+        "recommended_for": [
+            "중단기 공격적 비중 조절이 가능한 분",
+            "높은 변동성을 감수할 수 있는 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
+        "caution": "횡보장에서는 복리 효과로 기대보다 수익이 낮아질 수 있습니다.",
+    },
+    "TQQQ": {
+        "intro": "기술 지수의 일일 수익률을 3배로 추종하는 고위험 레버리지 상품입니다.",
+        "recommended_for": [
+            "공격적 운용 경험이 있는 분",
+            "단기 변동성 대응이 가능한 분",
+        ],
+        "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
+        "caution": "하락장에서 손실이 매우 빠르게 커질 수 있어 장기 방치에 특히 주의해야 합니다.",
+    },
+    "SSO": {
+        "intro": "미국 대형주 지수의 일일 움직임을 2배로 추종하는 레버리지 상품입니다.",
+        "recommended_for": [
+            "시장 상승 관점에서 공격 비중을 일부 두고 싶은 분",
+            "리스크 관리 계획이 있는 분",
+        ],
+        "top_holdings": ["Apple", "Microsoft", "NVIDIA"],
+        "caution": "큰 하락 구간에서는 원금 회복에 오래 걸릴 수 있습니다.",
+    },
+    "UPRO": {
+        "intro": "미국 대형주 지수의 일일 움직임을 3배로 추종하는 초고변동 레버리지 상품입니다.",
+        "recommended_for": [
+            "고위험·고수익 전략을 명확히 이해한 분",
+            "짧은 주기로 리밸런싱 가능한 분",
+        ],
+        "top_holdings": ["Apple", "Microsoft", "NVIDIA"],
+        "caution": "단기간 큰 손실 가능성이 높아 포트폴리오 소수 비중으로 제한하는 것이 일반적입니다.",
+    },
+    "SOXL": {
+        "intro": "미국 반도체 지수의 일일 수익률을 3배로 추종하는 초고변동 레버리지 상품입니다.",
+        "recommended_for": [
+            "반도체 업황에 대한 강한 관점을 가진 분",
+            "매우 높은 변동성 대응이 가능한 분",
+        ],
+        "top_holdings": ["NVIDIA", "Broadcom", "AMD"],
+        "caution": "섹터 집중 + 3배 레버리지 구조라 가격 변동이 매우 큽니다.",
+    },
+}
+
+
+def _format_risk_label(star_count):
+    if star_count <= 2:
+        return "낮음"
+    if star_count == 3:
+        return "중간"
+    return "높음"
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_usdkrw_rate():
+    if yf is None:
+        return 1400.0
+    try:
+        fx = yf.Ticker("KRW=X")
+        hist = fx.history(period="5d", auto_adjust=True)
+        if hist.empty:
+            return 1400.0
+        return float(hist["Close"].iloc[-1])
+    except Exception:
+        return 1400.0
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_live_etf_snapshot(ticker):
+    """Yahoo Finance 기반 실시간 스냅샷(현재가, 배당률, 과거 연환산 수익률)."""
+    if yf is None:
+        return {}
+
+    try:
+        etf = yf.Ticker(ticker)
+        info = etf.info or {}
+        fast_info = getattr(etf, "fast_info", {}) or {}
+
+        price_usd = (
+            fast_info.get("lastPrice")
+            or fast_info.get("regularMarketPrice")
+            or info.get("regularMarketPrice")
+        )
+        dividend_yield = info.get("yield")
+        if dividend_yield is None:
+            dividend_yield = info.get("dividendYield")
+
+        annual_return_pct = None
+        hist = etf.history(period="10y", auto_adjust=True)
+        if hist is not None and not hist.empty and len(hist) >= 252 * 3:
+            first_close = float(hist["Close"].iloc[0])
+            last_close = float(hist["Close"].iloc[-1])
+            elapsed_years = max((hist.index[-1] - hist.index[0]).days / 365.25, 1e-6)
+            if first_close > 0 and last_close > 0 and elapsed_years > 0:
+                annual_return_pct = ((last_close / first_close) ** (1 / elapsed_years) - 1) * 100
+
+        return {
+            "price_usd": float(price_usd) if price_usd is not None else None,
+            "dividend_yield_pct": float(dividend_yield * 100) if dividend_yield is not None else None,
+            "annual_return_pct": annual_return_pct,
+        }
+    except Exception:
+        return {}
 
 
 def _etf_card_html(ticker, is_selected=False):
@@ -568,12 +742,21 @@ def _replace_radio_key(slot_idx):
     return f"replace_radio_{slot_idx}"
 
 
+def _resolve_replace_index(raw_value, replace_options, default_idx=0):
+    """라디오 세션 값(int/str 혼재)을 안전한 인덱스로 정규화합니다."""
+    if isinstance(raw_value, int):
+        if 0 <= raw_value < len(replace_options):
+            return raw_value
+        return default_idx if 0 <= default_idx < len(replace_options) else 0
+    if isinstance(raw_value, str) and raw_value in replace_options:
+        return replace_options.index(raw_value)
+    return default_idx if 0 <= default_idx < len(replace_options) else 0
+
+
 def _apply_etf_replace(slot_idx, old_ticker, replace_options):
     """같은 카테고리 ETF로만 포트폴리오 종목을 교체합니다."""
     radio_key = _replace_radio_key(slot_idx)
-    picked_idx = st.session_state.get(radio_key, 0)
-    if not isinstance(picked_idx, int) or picked_idx < 0 or picked_idx >= len(replace_options):
-        picked_idx = 0
+    picked_idx = _resolve_replace_index(st.session_state.get(radio_key, 0), replace_options, 0)
     new_ticker = replace_options[picked_idx]
     if not new_ticker or new_ticker == old_ticker:
         return
@@ -612,7 +795,6 @@ SIMULATION_BASE_STATS = {
     "지수추적": {"mu": 0.075, "sigma": 0.15},
     "배당형": {"mu": 0.055, "sigma": 0.12},
     "커버드콜": {"mu": 0.050, "sigma": 0.10},
-    "기술":   {"mu": 0.080, "sigma": 0.18},
     "레버리지": {"mu": 0.075, "sigma": 0.15},
 }
 
@@ -1141,8 +1323,6 @@ def build_strategy_reason(profile_weights, selected_etfs, analysis_mode):
             "커버드콜 성향을 반영해 옵션 프리미엄·월배당형 ETF를 포함했습니다. "
             "급등 구간에서는 수익이 제한될 수 있습니다."
         )
-    if profile_weights.get("기술", 0) >= top_pct:
-        reasons.append("기술 성향을 반영해 IT·반도체 섹터 ETF를 포함했습니다.")
     if profile_weights.get("레버리지", 0) >= top_pct:
         reasons.append("레버리지 성향이 높아 공격적 수익 추구 ETF를 포함했습니다. 분할매수와 비중 상한을 권장합니다.")
     if analysis_mode == "목표 금액 달성":
@@ -1468,25 +1648,59 @@ def run_streamlit_app():
             info = ETF_DATA.get(ticker, {})
             weight = etf_weights.get(ticker, 1/len(selected_etfs))
             weight_pct = round(weight * 100, 1)
+            detail = ETF_DETAIL_GUIDE.get(ticker, {})
+            live_snapshot = _get_live_etf_snapshot(ticker)
+            usdkrw = _get_usdkrw_rate()
+            annual_return = live_snapshot.get("annual_return_pct")
+            if annual_return is None:
+                annual_return = _get_etf_annual_return(ticker)
+            current_price = live_snapshot.get("price_usd")
+            dividend_yield = live_snapshot.get("dividend_yield_pct")
+            if dividend_yield is None and info.get("배당"):
+                dividend_yield = 2.0
+            risk_stars = _get_risk_stars(ticker)
+            risk_text = _format_risk_label(risk_stars)
+            category_label = CATEGORY_DISPLAY_LABELS.get(info.get("카테고리", ""), info.get("카테고리", ""))
             
             with st.expander(f"**{ticker}** - {info.get('이름', '')} ({weight_pct}%)"):
-                col1, col2 = st.columns([1, 1])
-                
-                with col1:
-                    st.write("**기본 정보**")
-                    st.write(f"• **카테고리**: {info.get('카테고리', '')}")
-                    if info.get("카테고리") == "커버드콜":
-                        st.caption(
-                            "콜옵션 매도로 프리미엄(월배당 등)을 받는 전략. "
-                            "급등 시 주가 상승 이익은 제한될 수 있습니다."
-                        )
-                    st.write(f"• **보수율**: {info.get('보수율', 0)*100:.2f}%")
-                    st.write(f"• **배당**: {'있음 💰' if info.get('배당') else '없음'}")
-                    st.write(f"• **레버리지**: {'3배 🚀' if info.get('레버리지') else '없음'}")
-                
-                with col2:
-                    st.write("**설명**")
-                    st.write(ETF_SUMMARY_DESCRIPTIONS.get(ticker, ""))
+                st.markdown(f"**{ETF_SUMMARY_DESCRIPTIONS.get(ticker, info.get('이름', ''))}**")
+                if detail.get("intro"):
+                    st.write(detail["intro"])
+
+                st.write(f"• **분류(카테고리):** {category_label}")
+                st.write(f"• **역사적 연평균 수익률(추정):** {annual_return:.1f}%")
+
+                if current_price is not None:
+                    krw_price = current_price * usdkrw
+                    st.write(
+                        f"• **현재 주가:** ${current_price:,.2f} (약 {int(krw_price):,}원)"
+                    )
+                else:
+                    st.write("• **현재 주가:** 데이터를 불러오지 못했습니다.")
+
+                if dividend_yield is not None:
+                    st.write(f"• **배당수익률:** 연 {dividend_yield:.1f}%")
+                else:
+                    st.write("• **배당수익률:** 정보 없음")
+
+                st.write(f"• **위험도:** {'★' * risk_stars}{'☆' * (5 - risk_stars)} ({risk_text})")
+                st.write(f"• **🏦 운용보수:** 연 {info.get('보수율', 0)*100:.2f}%")
+
+                recommended_for = detail.get("recommended_for", [])
+                if recommended_for:
+                    st.write("**이런 분께 추천:**")
+                    for item in recommended_for:
+                        st.write(f"→ {item}")
+
+                top_holdings = detail.get("top_holdings", [])
+                if top_holdings:
+                    st.write("**대표 보유 종목:**")
+                    st.write(f"→ {', '.join(top_holdings)}")
+
+                caution = detail.get("caution")
+                if caution:
+                    st.write("**주의사항:**")
+                    st.write(f"→ {caution}")
         
         st.markdown("---")
 
@@ -1534,8 +1748,13 @@ def run_streamlit_app():
             if radio_key not in st.session_state:
                 default_idx = 1 if len(replace_options) > 1 else 0
                 st.session_state[radio_key] = default_idx
-            elif st.session_state[radio_key] >= len(replace_options):
-                st.session_state[radio_key] = 0
+            else:
+                default_idx = 1 if len(replace_options) > 1 else 0
+                st.session_state[radio_key] = _resolve_replace_index(
+                    st.session_state.get(radio_key),
+                    replace_options,
+                    default_idx,
+                )
 
             picked_idx = st.radio(
                 "교체할 ETF",
@@ -1723,9 +1942,9 @@ def run_streamlit_app():
 
         # 리밸런싱 주기 추천
         dominant = max(AI_PROFILE_CATEGORIES, key=lambda k: profile_weights.get(k, 0))
-        if dominant in ["기술", "지수추적", "레버리지"]:
+        if dominant in ["지수추적", "레버리지"]:
             rebalance_rec = "분기"
-            rebalance_reason = "지수추적·기술·레버리지 비중이 높으면 더 자주 리밸런싱하여 비중 관리를 권장합니다."
+            rebalance_reason = "지수추적·레버리지 비중이 높으면 더 자주 리밸런싱하여 비중 관리를 권장합니다."
         elif dominant in ["배당형", "커버드콜"]:
             rebalance_rec = "반기"
             rebalance_reason = "배당형·커버드콜 비중이 높으면 반기 리밸런싱으로 현금흐름과 비중 균형을 맞추기 좋습니다."
