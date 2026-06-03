@@ -79,10 +79,65 @@ COVERED_CALL_EXPLANATION = """
 즉, “크게 한 번 벌기”보다 “꾸준히 받기”에 가까운 성향입니다.
 """
 
+LEVERAGE_EXPLANATION = """
+### 🎯 레버리지 ETF가 뭔가요?
+
+**간단히 말해:**
+- 일반 지수(예: 나스닥)를 **2배 또는 3배** 빠르게 움직이도록 한 상품
+- 수익도 2-3배 크지만, **손실도 2-3배 크다**
+
+---
+
+### ⚠️ 가장 중요한 주의사항 - "일일 변동성"
+
+**왜 중요한가?** 레버리지 ETF는 **매일매일** 정산되기 때문입니다.
+
+**쉬운 예시:**
+```
+지수가 상승 +10% → 하락 -10% → 다시 +10% 반복된다면?
+
+📊 일반 ETF(예: QQQ):
+   전체 손실 없음 (원점 복귀) ✓
+
+📊 레버리지 ETF(TQQQ 3배):
+   매번 정산되면서 조금씩 손실 발생...
+   결과: 원점에서 약간 손실 ✗
+```
+
+**일반인이 이해할 포인트:**
+- 🔄 시장이 오르내릴 때마다 자산이 천천히 깎임
+- 📉 특히 "횡보(요동치는 구간)"에서 손실 많음
+
+---
+
+### ✅ 레버리지 ETF 사용 가이드
+
+| 좋은 경우 | 안 좋은 경우 |
+|---|---|
+| 📈 **지속적 상승** 추세 | 🔀 **횡보/요동** 구간 |
+| ⏱️ **1개월~1년** 단기 | 📅 **5년 이상** 장기 보유 |
+| 💪 **여유 자금** 소액 투자 | 💰 **전체 자산 대부분** |
+
+---
+
+### 💡 결론
+
+레버리지 ETF는 **단기 고수익을 노리는 고급 투자자용** 상품입니다.
+
+**초보자는:**
+- 🟢 **안전 선택:** VOO, QQQ 같은 일반 지수 추적 ETF
+- 🟡 **도전 가능:** 작은 비중만 레버리지 시도 (전체의 10-20%)
+- 🔴 **피할 것:** 장기 보유 또는 전체 자산 투자
+"""
+
 PROFILE_METRIC_HELP = {
     "커버드콜": (
         "보유 자산에 콜옵션을 매도해 프리미엄(월배당 등)을 받는 전략. "
         "급등 시 수익은 제한될 수 있습니다."
+    ),
+    "레버리지": (
+        "2배 또는 3배 레버리지를 사용하는 상품. 수익이 크지만 손실도 크고 "
+        "일일변동성 영향이 있으므로 주의가 필요합니다."
     ),
 }
 
@@ -191,12 +246,9 @@ AI_PROFILE_QUESTIONS = {
         ],
     },
     "Q7": {
-        "type": "multi",
-        "max_select": PROFILE_MULTI_SELECT_MAX,
         "text": (
-            "6단계: 관심 상품 유형 (복수 선택)\n\n"
-            f"**Q7. 아래 중 관심 있는 투자 유형을 골라 주세요. (최대 {PROFILE_MULTI_SELECT_MAX}개)**\n\n"
-            "해당되는 것만 고르세요. 전부 고르지 않아도 됩니다."
+            "6단계: 관심 상품 유형\n\n"
+            "**Q7. 아래 중 가장 관심 있는 투자 유형은 무엇인가요?**"
         ),
         "choices": [
             "① 대표 기업들을 넓게 담아 시장 흐름 따라가기",
@@ -205,10 +257,29 @@ AI_PROFILE_QUESTIONS = {
             "④ 변동이 큰 고위험·고수익 상품",
         ],
         "scores": [
-            {"지수추적": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
-            {"배당형": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
-            {"커버드콜": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
-            {"레버리지": PROFILE_MULTI_SELECT_POINTS_PER_CHOICE},
+            {"지수추적": 3},
+            {"배당형": 3},
+            {"커버드콜": 3},
+            {"레버리지": 3},
+        ],
+        "follow_up": {3: "Q7_SUB"},
+    },
+    "Q7_SUB": {
+        "text": (
+            "**Q7-추가. (심화) 레버리지 ETF를 이해하고 있나요?**\n\n"
+            "고위험 상품 중 하나인 '레버리지 ETF'에 대해 얼마나 알고 계신가요?"
+        ),
+        "choices": [
+            "① 레버리지 ETF가 뭔지 잘 몰라요. 자세히 설명해주세요.",
+            "② 대충 2배~3배 움직인다고만 알아요.",
+            "③ 일일 변동성과 음의 복리 개념을 알고 있어요.",
+            "④ 레버리지 ETF의 위험성을 충분히 이해하고 있어요.",
+        ],
+        "scores": [
+            {"레버리지": 0},
+            {"레버리지": 1},
+            {"레버리지": 2},
+            {"레버리지": 2},
         ],
     },
     "Q8": {
@@ -226,11 +297,15 @@ AI_PROFILE_BASE_QUESTIONS = ["Q1", "Q2", "Q3", "Q4", "Q6", "Q7", "Q8"]
 
 
 def get_profile_question_order(responses):
-    """응답 상태에 따른 질문 순서(Q5 조건부 포함)."""
+    """응답 상태에 따른 질문 순서(Q5 조건부 포함, Q7_SUB 조건부)."""
     order = list(AI_PROFILE_BASE_QUESTIONS)
     if responses.get("Q4") == 2:
         q4_idx = order.index("Q4")
         order.insert(q4_idx + 1, "Q5")
+    # Q7에서 "④ 변동이 큰 고위험·고수익 상품" (인덱스 3)을 선택했으면 Q7_SUB 추가
+    if responses.get("Q7") == 3:
+        q7_idx = order.index("Q7")
+        order.insert(q7_idx + 1, "Q7_SUB")
     return order
 
 
@@ -295,7 +370,7 @@ def calculate_profile_scores(responses):
         profile = {cat: round((scores[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
 
     leverage_from_q5 = responses.get("Q5") == 1 if "Q5" in responses else None
-    leverage_from_q7 = 3 in responses.get("Q7", []) if isinstance(responses.get("Q7"), list) else False
+    leverage_from_q7 = responses.get("Q7") == 3  # Q7에서 레버리지(④) 선택 여부
     if leverage_from_q5 is not None:
         profile["_leverage_allowed"] = leverage_from_q5
     else:
@@ -325,6 +400,8 @@ def render_profile_metrics(profile_weights):
             )
     with st.expander("💡 커버드콜이란? (처음이시라면 읽어보세요)"):
         st.markdown(COVERED_CALL_EXPLANATION)
+    with st.expander("💡 레버리지 ETF란? (처음이시라면 읽어보세요)"):
+        st.markdown(LEVERAGE_EXPLANATION)
 
 # ============================================================
 # 섹션 3. ETF 추천 함수
@@ -1685,63 +1762,82 @@ def run_streamlit_app():
             st.session_state[key] = fmt_money(int(default_won) // 10000)
 
     def render_manwon_amount_input(title, key, default_won):
-        """만원 단위 입력과 원 단위 환산 표시를 함께 렌더링합니다."""
+        """직접 입력 + 프리셋 버튼 방식의 금액 입력"""
         init_man_amount_key(key, default_won)
-        st.markdown(f"#### {title}")
-
-        input_cols = st.columns([5, 1])
+        
+        st.markdown(f"#### 💰 {title}")
+        
+        # 입력창 + 프리셋 버튼 한 줄로
+        input_cols = st.columns([2, 1, 1, 1, 1, 1])
+        
         with input_cols[0]:
             st.text_input(
-                f"{title} (만원)",
+                "금액 입력",
                 key=key,
                 on_change=format_money_input,
                 args=(key,),
                 label_visibility="collapsed",
-                placeholder="만원",
+                placeholder="예: 5000 (= 5,000만원)",
             )
-        with input_cols[1]:
-            st.button(
-                "다시입력 ↻",
-                key=f"{key}_reset",
-                on_click=reset_man_amount,
-                args=(key,),
-                use_container_width=True,
-            )
-
-        amount_won = int(format_won_from_manwon_key(key))
+        
+        preset_amounts = [
+            ("100만", 100),
+            ("500만", 500),
+            ("1000만", 1000),
+            ("5000만", 5000),
+            ("1억", 10000),
+        ]
+        
+        # 콜백 함수: 프리셋 값을 세션 상태에 저장
+        def set_preset_value(manwon_val):
+            st.session_state[key] = fmt_money(manwon_val)
+        
+        # 프리셋 버튼 처리
+        for idx, (label, manwon_val) in enumerate(preset_amounts):
+            col = input_cols[idx + 1]
+            with col:
+                st.button(
+                    label,
+                    key=f"{key}_btn_{idx}",
+                    use_container_width=True,
+                    on_click=set_preset_value,
+                    args=(manwon_val,),
+                )
+        
+        # 입력값 표시
+        try:
+            amount_won = int(format_won_from_manwon_key(key))
+        except Exception as e:
+            amount_won = 0
+            
+        display_manwon = st.session_state.get(key, "") or "0"
+        
         st.markdown(
             f"""
             <div style="
-                border:1px solid #d9dce3;
-                border-radius:18px;
-                padding:16px 24px;
-                margin:-6px 0 16px 0;
+                background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-radius:12px;
+                padding:18px 24px;
+                margin:12px 0;
                 display:flex;
                 justify-content:space-between;
                 align-items:center;
-                background:#ffffff;
+                box-shadow:0 4px 12px rgba(102, 126, 234, 0.3);
             ">
-                <span style="color:#4f63ff;font-size:1.05rem;font-weight:700;">
-                    {st.session_state.get(key, '') or '0'}만원
-                </span>
-                <span style="color:#111827;font-size:1.45rem;font-weight:800;">
-                    {fmt_money(amount_won)}<span style="color:#6b7280;font-size:1rem;">원</span>
-                </span>
+                <span style="color:#ffffff;font-size:0.95rem;font-weight:600;">💾 입력금액</span>
+                <div style="text-align:right;">
+                    <div style="color:#e0e7ff;font-size:0.9rem;font-weight:500;">
+                        {display_manwon} 만원
+                    </div>
+                    <div style="color:#ffffff;font-size:1.6rem;font-weight:800;">
+                        {fmt_money(amount_won)}원
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        quick_cols = st.columns(5)
-        for col, inc in zip(quick_cols, [50, 100, 500, 1000, 5000]):
-            col.button(
-                f"+{inc}만원",
-                key=f"{key}_plus_{inc}",
-                on_click=change_man_amount,
-                args=(key, inc),
-                use_container_width=True,
-            )
-
+        
         return amount_won
 
     if "app_step" not in st.session_state:
@@ -1828,14 +1924,44 @@ def run_streamlit_app():
             q_data = AI_PROFILE_QUESTIONS[current_q]
             is_multi = _is_multi_select_question(current_q)
 
+            # 질문 제목과 텍스트
             st.write(q_text)
-            if current_q == "Q7":
-                with st.expander("💡 커버드콜이란? (자세히 보기)"):
-                    st.markdown(COVERED_CALL_EXPLANATION)
-
+            
+            # 진행 상황
             completed = len(responses)
             total_questions = count_total_profile_questions(responses)
             st.write(f"진행 상황: {completed}/{total_questions}")
+            
+            # 질문별 설명 또는 힌트
+            if current_q == "Q1":
+                st.info("💡 이 질문은 당신의 가장 중요한 투자 목표를 파악합니다.")
+            elif current_q == "Q3":
+                st.info("💡 현금이 들어오는 느낌과 자산이 커지는 느낌 중 어느 것이 더 좋은지 선택해 주세요.")
+            elif current_q == "Q4":
+                st.warning("⚠️ 이 질문은 당신의 위험 감수 능력을 파악하는 중요한 질문입니다.")
+            elif current_q == "Q5":
+                st.info("💡 Q4의 답변에 따라 나타나는 심화 질문입니다.")
+            elif current_q == "Q7":
+                st.markdown(
+                    """
+                    <div style="background-color:#f0f7ff;padding:12px;border-left:4px solid #1f77b4;border-radius:4px;margin-bottom:16px;">
+                    <strong>💡 알아두세요:</strong> <strong>커버드콜</strong>은 월배당처럼 정기적인 현금흐름을 받는 전략입니다. 
+                    <strong>레버리지 ETF</strong>는 2-3배 움직이는 고위험 상품입니다.
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            elif current_q == "Q7_SUB":
+                st.markdown(
+                    """
+                    <div style="background-color:#fff3cd;padding:12px;border-left:4px solid #ff9800;border-radius:4px;margin-bottom:16px;">
+                    <strong>⚠️ 레버리지 ETF 이해도 측정:</strong> 아래 질문을 통해 당신의 이해도를 파악하고 적절한 비중을 추천합니다.
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                with st.expander("📖 레버리지 ETF 간단 설명 보기"):
+                    st.markdown(LEVERAGE_EXPLANATION)
 
             if is_multi:
                 max_select = q_data.get("max_select", PROFILE_MULTI_SELECT_MAX)
@@ -1859,6 +1985,7 @@ def run_streamlit_app():
                     format_func=lambda i: q_choices[i],
                     index=responses.get(current_q, 0) if current_q in responses else 0,
                     key=f"choice_{current_q}",
+                    label_visibility="collapsed",
                 )
 
             cols = st.columns([2, 2, 1])
@@ -2022,12 +2149,20 @@ def run_streamlit_app():
         st.markdown(
             """
             <style>
-            /* 종목 교체 라디오: 한 줄씩 넓게, 줄바꿈 유지 */
+            /* 종목 교체 라디오: 세로 레이아웃으로 가독성 향상 */
             div[data-testid="stRadio"] label {
                 white-space: pre-line !important;
                 line-height: 1.55 !important;
-                padding: 0.65rem 0.25rem !important;
+                padding: 1.0rem 0.75rem !important;
                 align-items: flex-start !important;
+                border-left: 3px solid #ddd !important;
+                margin-bottom: 0.5rem !important;
+                background-color: #f9f9f9 !important;
+                border-radius: 4px !important;
+            }
+            div[data-testid="stRadio"] label:hover {
+                background-color: #f0f0f0 !important;
+                border-left-color: #1f77b4 !important;
             }
             div[data-testid="stRadio"] label p {
                 white-space: pre-line !important;
@@ -2035,7 +2170,7 @@ def run_streamlit_app():
                 margin: 0 !important;
             }
             div[data-testid="stRadio"] > div {
-                gap: 0.15rem !important;
+                gap: 0.5rem !important;
             }
             </style>
             """,
@@ -2049,6 +2184,17 @@ def run_streamlit_app():
 
             st.subheader(f"📌 {current_ticker} · {category}")
             st.write(f"포트폴리오 **{slot_idx + 1}번** 종목 — 같은 카테고리 ETF 중에서 선택")
+
+            # 현재 종목의 설명 표시
+            with st.expander(f"📊 {current_ticker} 상세 정보 보기"):
+                current_info = ETF_DATA.get(current_ticker, {})
+                st.write(f"**이름:** {current_info.get('이름', 'N/A')}")
+                st.write(f"**카테고리:** {current_info.get('카테고리', 'N/A')}")
+                st.write(f"**보수율:** {current_info.get('보수율', 0) * 100:.2f}%")
+                st.write(f"**배당:** {'있음' if current_info.get('배당') else '없음'}")
+                st.write(f"**레버리지:** {'있음 (위험)' if current_info.get('레버리지') else '없음'}")
+                if current_ticker in ETF_SUMMARY_DESCRIPTIONS:
+                    st.info(f"📝 {ETF_SUMMARY_DESCRIPTIONS[current_ticker]}")
 
             if len(replace_options) <= 1:
                 st.info(f"**{category}** 카테고리에 선택 가능한 다른 ETF가 없습니다.")
@@ -2076,6 +2222,20 @@ def run_streamlit_app():
                 label_visibility="collapsed",
             )
             picked_ticker = replace_options[picked_idx]
+
+            # 교체 후보 ETF들의 비교 정보
+            with st.expander("💡 교체 가능한 ETF 비교"):
+                comparison_data = []
+                for option_ticker in replace_options:
+                    info = ETF_DATA.get(option_ticker, {})
+                    comparison_data.append({
+                        "종목": option_ticker,
+                        "이름": info.get("이름", "")[:40] + "..." if len(info.get("이름", "")) > 40 else info.get("이름", ""),
+                        "보수율(%)": f"{info.get('보수율', 0) * 100:.2f}",
+                        "배당": "O" if info.get("배당") else "X",
+                        "상태": "현재 보유" if option_ticker == current_ticker else "선택 가능"
+                    })
+                st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 
             error_key = f"replace_error_{slot_idx}"
             if error_key in st.session_state:
@@ -2109,7 +2269,7 @@ def run_streamlit_app():
         step_button_row()
 
     elif current_step == 4:
-        # 전략 추천 화면
+        # 종합 투자 전략 보고서
         if not profile_weights:
             st.warning("STEP1을 먼저 완료해 주세요.")
             if st.button("STEP1로 이동", key="goto1c"):
@@ -2121,51 +2281,107 @@ def run_streamlit_app():
                 move_step(2)
             return
 
-        st.write("### 매수 전략 추천")
+        st.markdown("## 📋 종합 투자 전략 보고서")
+        st.markdown("**STEP 1~3 분석 결과를 바탕으로 한 맞춤형 투자 전략입니다.**")
+        st.markdown("---")
 
-        # 포트폴리오 가중치 (점수에 따른 비중 적용)
+        # ===== 섹션 1: 투자 성향 분석 요약 =====
+        st.markdown("### 📊 1. 투자 성향 분석 결과")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        for col, category in zip([col1, col2, col3, col4], AI_PROFILE_CATEGORIES):
+            pct = profile_weights.get(category, 0)
+            col.metric(category, f"{pct:.0f}%")
+        
+        top_categories = sorted(
+            [(cat, profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        top_cat = top_categories[0][0]
+        top_pct = top_categories[0][1]
+        
+        description = ""
+        if top_cat == "지수추적":
+            description = "📈 시장 지수를 따라가며 안정적인 장기 수익을 추구하는 성향입니다."
+        elif top_cat == "배당형":
+            description = "💰 정기적인 배당 수익을 통해 안정적인 현금흐름을 원하는 성향입니다."
+        elif top_cat == "커버드콜":
+            description = "📅 월배당·프리미엄 수익을 통해 규칙적인 추가 수익을 기대하는 성향입니다."
+        elif top_cat == "레버리지":
+            description = "🚀 높은 수익을 추구하되 높은 변동성을 감수할 수 있는 공격적 성향입니다."
+        
+        st.write(f"**최상위 성향:** {top_cat} ({top_pct:.0f}%)")
+        st.write(description)
+
+        st.markdown("---")
+
+        # ===== 섹션 2: 선택된 포트폴리오 =====
+        st.markdown("### 🎯 2. 추천 포트폴리오 구성")
+        
         etf_weights = st.session_state.get("etf_weights", {})
+        def fmt_money(n):
+            try:
+                f = float(n)
+            except Exception:
+                return "0"
+            if f.is_integer():
+                return f"{int(f):,}"
+            s = f"{f:,}"
+            if "." in s:
+                s = s.rstrip('0').rstrip('.')
+            return s
+        
+        portfolio_data = []
+        for idx, ticker in enumerate(selected_etfs, 1):
+            info = ETF_DATA.get(ticker, {})
+            weight = etf_weights.get(ticker, 1/len(selected_etfs))
+            weight_pct = round(weight * 100, 1)
+            portfolio_data.append({
+                "순위": idx,
+                "ETF": ticker,
+                "이름": info.get("이름", "")[:35],
+                "카테고리": info.get("카테고리", ""),
+                "비중": f"{weight_pct}%"
+            })
+        
+        portfolio_df = pd.DataFrame(portfolio_data)
+        st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
+        
         try:
             portfolio_weights = build_portfolio_weights(selected_etfs, etf_weights)
         except Exception:
             portfolio_weights = {t: 1.0 / max(1, len(selected_etfs)) for t in selected_etfs}
+        
         portfolio_avg_return = sum(
             portfolio_weights.get(ticker, 0) * ETF_DATA[ticker].get("cagr", 0.10)
             for ticker in portfolio_weights
         ) or 0.06
+        
+        leverage_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("레버리지", False))
+        dividend_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("배당", False))
+        
+        st.write(f"• **예상 연평균 수익률:** {portfolio_avg_return * 100:.2f}%")
+        st.write(f"• **배당 ETF 포함:** {dividend_count}개")
+        st.write(f"• **레버리지 ETF 포함:** {leverage_count}개")
 
-        leverage_present = False
-        for t in selected_etfs:
-            if ETF_DATA.get(t, {}).get("레버리지", False):
-                leverage_present = True
+        st.markdown("---")
 
-        q8_answer = st.session_state.get("profile_responses", {}).get("Q8")
-        if q8_answer == 0:
-            buy_rec = "혼합식"
-            buy_reason = "목돈은 한 번에 모두 넣기보다 나누어 시작하는 편이 부담이 적습니다.\n매달 넣을 수 있는 돈도 있으니, 초기 투자와 정기 적립을 함께 가져가는 방식이 잘 맞습니다."
-        elif q8_answer == 1:
-            buy_rec = "거치식"
-            buy_reason = "이미 가진 목돈을 중심으로 투자하는 방식이 맞습니다.\n매달 추가 투자 여력이 크지 않으니, 처음 투자한 금액을 오래 유지하는 전략이 좋습니다."
-        elif q8_answer == 2:
-            buy_rec = "적립식"
-            buy_reason = "목돈이 없어도 매달 꾸준히 넣으면 투자 습관을 만들기 좋습니다.\n가격이 오르내려도 정해진 금액을 반복해서 투자하는 방식이 잘 맞습니다."
-        else:
-            buy_rec = "혼합식"
-            buy_reason = "투자 자금 상황을 아직 확인하지 못해 기본적으로 균형 잡힌 방식을 추천합니다.\n목돈과 월 투자 여력에 맞춰 초기 투자와 정기 적립 비중을 조절하면 됩니다."
-
-        # 추가 권장 이유 텍스트
-        extra_notes = []
-        if leverage_present:
-            extra_notes.append("포트폴리오에 레버리지 ETF가 포함되어 있습니다. 레버리지 상품은 변동성이 크므로 분할매수(예: 3~6회)와 포지션 제한을 권장합니다.")
-
-        # 출력
-        st.subheader("목표 계산 결과")
-        st.write(f"**예상 포트폴리오 수익률:** {portfolio_avg_return * 100:.2f}%")
-
+        # ===== 섹션 3: 투자 목표 및 계획 =====
+        st.markdown("### 🎲 3. 투자 목표 및 시나리오")
+        
         target_won = int(st.session_state.get("target_amount", 0))
         current_capital = float(st.session_state.get("current_capital", 0.0))
         selected_mode = st.session_state.get("analysis_mode")
-
+        
+        goal_col1, goal_col2 = st.columns(2)
+        with goal_col1:
+            st.metric("현재 보유 자금", f"{fmt_money(int(current_capital))}원")
+        with goal_col2:
+            st.metric("목표 금액", f"{fmt_money(target_won)}원")
+        
+        st.write(f"**분석 모드:** {selected_mode}")
+        
         if selected_mode == "목표 금액 달성":
             monthly_won = int(st.session_state.get("monthly_contribution", 0))
             required_years = estimate_years_to_target(
@@ -2174,25 +2390,34 @@ def run_streamlit_app():
                 current_capital,
                 avg_return=portfolio_avg_return,
             )
+            
+            st.write(f"• **월 적립 계획:** {fmt_money(monthly_won)}원")
+            
             if current_capital >= target_won:
-                st.success("현재 보유 자금만으로도 달성 가능합니다.")
-            elif not np.isfinite(required_years) or required_years == float("inf") or monthly_won <= 0:
-                st.warning(
-                    "현재 자금만으로는 달성이 어렵습니다.\n"
-                    f"월 {fmt_money(int(np.ceil(monthly_won / 10000)))}만원 추가 적립 시 달성 가능합니다."
-                )
+                st.success("✅ 현재 보유 자금만으로도 목표 달성 완료!")
+            elif monthly_won <= 0:
+                st.warning("⚠️ 월 적립금이 0입니다. 목표 달성에 필요한 월 적립금을 설정해 주세요.")
+            elif not np.isfinite(required_years) or required_years == float("inf"):
+                st.warning("⚠️ 현재 설정으로는 목표 달성이 어렵습니다.")
             else:
                 total_months = int(round(required_years * 12))
                 years_calc = total_months // 12
                 months_remain = total_months % 12
-                st.write(f"**예상 달성 기간:** {years_calc}년 {months_remain}개월")
+                st.write(f"• **예상 달성 기간:** {years_calc}년 {months_remain}개월")
+                
         elif selected_mode == "목표 기간 확인":
             target_years_val = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+            start_date = st.session_state.get("sim_period_mode3_start", st.session_state.get("invest_period_start", date.today()))
+            end_date = st.session_state.get("sim_period_mode3_end", st.session_state.get("invest_period_end"))
+            
+            st.write(f"• **투자 기간:** {format_period_label(start_date, end_date)}")
+            
             months = int(target_years_val * 12)
             monthly_r = portfolio_avg_return / 12
             future_current_capital = current_capital * np.power(1 + monthly_r, months)
+            
             if future_current_capital >= target_won:
-                st.success("현재 보유 자금만으로도 달성 가능합니다.")
+                st.success("✅ 현재 보유 자금만으로도 목표 달성 가능!")
             else:
                 required_monthly = estimate_required_contribution(
                     target_won,
@@ -2200,15 +2425,107 @@ def run_streamlit_app():
                     current_capital,
                     avg_return=portfolio_avg_return,
                 )
-                required_monthly_int = 0 if not np.isfinite(required_monthly) else int(np.ceil(required_monthly))
-                st.write(f"**필요 월 적립금:** {fmt_money(required_monthly_int)}원")
+                if not np.isfinite(required_monthly):
+                    required_monthly_int = 0
+                else:
+                    required_monthly_int = int(np.ceil(required_monthly))
+                st.write(f"• **필요 월 적립금:** {fmt_money(required_monthly_int)}원")
 
-        st.subheader("추천 매수 방식")
-        st.write(f"**권장 방식:** {buy_rec}")
-        st.write(f"**이유:**\n{buy_reason}")
-        if extra_notes:
-            for note in extra_notes:
-                st.info(note)
+        st.markdown("---")
+
+        # ===== 섹션 4: 종합 투자 전략 =====
+        st.markdown("### 💡 4. 종합 투자 전략 권고")
+        
+        q8_answer = st.session_state.get("profile_responses", {}).get("Q8")
+        if q8_answer == 0:
+            buy_rec = "혼합식 (거치식 + 적립식)"
+            buy_reason = "초기 목돈을 먼저 투자하고, 매달 정해진 금액을 추가로 적립하는 방식입니다. 초기 투자로 수익의 기초를 다지고, 정기적인 적립으로 평균 단가를 낮춰 장기 수익성을 높일 수 있습니다."
+        elif q8_answer == 1:
+            buy_rec = "거치식 (한 번에 투자)"
+            buy_reason = "현재 보유한 목돈을 한 번에 투자하고 장기 보유하는 방식입니다. 정기적인 적립 여력이 없으신 경우, 초기 투자 금액을 잘 분배하고 꾸준히 유지하는 것이 중요합니다."
+        elif q8_answer == 2:
+            buy_rec = "적립식 (정기적 매수)"
+            buy_reason = "매달 정해진 금액을 꾸준히 투자하는 방식입니다. 큰 목돈이 없어도 투자 습관을 만들 수 있으며, 시장 변동성에 덜 영향을 받을 수 있습니다."
+        else:
+            buy_rec = "혼합식 (거치식 + 적립식)"
+            buy_reason = "초기 목돈과 월 적립 여력에 맞춰 유연하게 조정하는 방식입니다. 투자 상황에 따라 거치식과 적립식의 비중을 조절할 수 있습니다."
+        
+        st.write(f"**🎯 권장 매수 방식:** {buy_rec}")
+        st.write(f"**📌 이유:**")
+        st.write(buy_reason)
+
+        st.markdown("---")
+
+        # ===== 섹션 5: 주의사항 =====
+        st.markdown("### ⚠️ 5. 주의사항 및 리스크 관리")
+        
+        cautions = []
+        
+        if leverage_count > 0:
+            cautions.append({
+                "title": "🚀 레버리지 ETF 관리",
+                "content": "포트폴리오에 레버리지 ETF가 포함되어 있습니다. 이들은 일반 지수 대비 2-3배 움직이므로:\n"
+                "• 변동성이 매우 크니 충분한 자금 여력을 확보하세요.\n"
+                "• 한 번에 모두 투자하기보다 3~6회 나누어 매수하세요.\n"
+                "• 레버리지 ETF 비중을 포트폴리오의 30% 이내로 제한하세요.\n"
+                "• 장기 보유 시 일일 정산으로 인한 손실 가능성을 인지하세요."
+            })
+        
+        if dividend_count > 0:
+            cautions.append({
+                "title": "💰 배당금 활용 전략",
+                "content": "배당 ETF에서 받은 배당금은:\n"
+                "• 재투자하여 복리 효과를 극대화하거나\n"
+                "• 리밸런싱 시에 활용할 수 있습니다."
+            })
+        
+        if top_cat == "커버드콜":
+            cautions.append({
+                "title": "📅 커버드콜 ETF 특성",
+                "content": "월배당 수익이 매력적이지만:\n"
+                "• 급등 구간에서는 상승 이익의 일부를 놓칠 수 있습니다.\n"
+                "• 하락 위험으로부터 완전히 보호되지는 않습니다.\n"
+                "• 배당 수익이 매월 일정하지 않을 수 있습니다."
+            })
+        
+        cautions.append({
+            "title": "🔄 정기적 리밸런싱",
+            "content": "연 1~2회 포트폴리오를 재조정하여:\n"
+            "• 목표 비중을 유지하고\n"
+            "• 변동성을 관리하며\n"
+            "• 장기 성과를 개선하세요."
+        })
+        
+        cautions.append({
+            "title": "📈 시장 변동성 대응",
+            "content": "시장이 하락할 때:\n"
+            "• 포트폴리오 구성의 타당성을 재검토하세요.\n"
+            "• 계획한 매수를 계속 진행하세요 (평균 단가 인하).\n"
+            "• 급한 매도는 피하세요."
+        })
+        
+        for idx, caution in enumerate(cautions, 1):
+            with st.expander(f"{caution['title']}"):
+                st.write(caution['content'])
+
+        st.markdown("---")
+
+        # ===== 섹션 6: 실행 체크리스트 =====
+        st.markdown("### ✅ 6. 투자 시작 전 체크리스트")
+        
+        checklist_items = [
+            "현재 보유 자금과 월 적립 가능액이 정확한가?",
+            "선택한 ETF들의 특성을 이해했는가?",
+            "투자 기간과 목표 금액이 현실적인가?",
+            "비상금(생활비 3~6개월)을 별도로 확보했는가?",
+            "포트폴리오 구성의 리스크를 수용할 수 있는가?",
+            "정기적으로 리밸런싱할 계획이 있는가?"
+        ]
+        
+        for item in checklist_items:
+            st.write(f"• {item}")
+
+        st.markdown("---")
 
         step_button_row()
 
@@ -2218,16 +2535,11 @@ def run_streamlit_app():
             if st.button("STEP1로 이동", key="goto1b"):
                 move_step(1)
             return
-        st.write("투자 방식과 목표값을 선택하세요.")
-        selected_analysis_mode = st.selectbox(
-            "STEP3: 모드 선택",
-            ANALYSIS_MODES,
-            index=ANALYSIS_MODES.index(st.session_state["analysis_mode"]),
-            key="analysis_mode_select"
-        )
-        st.session_state["analysis_mode"] = selected_analysis_mode
 
-        # 유틸: 금액 콤마 포맷 및 파서 (천단위 콤마, 소수 .00 제거)
+        st.markdown("### 💼 투자 목표 설정 및 분석")
+        st.markdown("**목표 금액, 현재 자금, 월 적립금, 투자 기간을 모두 입력하고 원하는 분석 모드를 선택하세요.**")
+        st.markdown("---")
+
         def fmt_money(n):
             try:
                 f = float(n)
@@ -2235,22 +2547,10 @@ def run_streamlit_app():
                 return "0"
             if f.is_integer():
                 return f"{int(f):,}"
-            # 소수점이 유의미할 경우 소수부의 불필요한 0 제거
             s = f"{f:,}"
             if "." in s:
                 s = s.rstrip('0').rstrip('.')
             return s
-
-        def parse_number_input(s):
-            if s is None:
-                return 0.0
-            s2 = str(s).replace(',', '').strip()
-            if s2 == '':
-                return 0.0
-            try:
-                return float(s2)
-            except Exception:
-                return 0.0
 
         step3_selected_etfs = st.session_state.get("selected_etfs", [])
         step3_etf_weights = st.session_state.get("etf_weights", {})
@@ -2260,82 +2560,164 @@ def run_streamlit_app():
             for ticker in step3_portfolio_weights
         ) or 0.06
 
-        # MODE: 목표 금액 달성 (입력: 목표 금액, 월 적립금)
-        mode_container = st.container()
+        # ===== 입력 섹션 (모두 한 번에 표시) =====
+        st.markdown("#### 📊 1단계: 투자 정보 입력")
+        
+        # 금액 입력
+        col1, col2 = st.columns(2)
+        with col1:
+            target_won = render_manwon_amount_input(
+                "목표 금액",
+                "unified_target_amount_manwon",
+                int(st.session_state.get("target_amount", 500000000)),
+            )
+        with col2:
+            current_capital = render_manwon_amount_input(
+                "현재 보유 자금",
+                "unified_current_capital_manwon",
+                int(st.session_state.get("current_capital", 0)),
+            )
+
+        col3, col4 = st.columns(2)
+        with col3:
+            monthly_won = render_manwon_amount_input(
+                "월 적립금",
+                "unified_monthly_contribution_manwon",
+                int(st.session_state.get("monthly_contribution", 100000)),
+            )
+        with col4:
+            st.markdown("#### ⏰ 투자 기간")
+            target_years_val = render_investment_period_selector(
+                key_prefix="unified_sim_period",
+                section_title="투자 기간 설정",
+                period_label="투자 기간",
+            )
+
+        st.markdown("---")
+        
+        # ===== 분석 모드 선택 =====
+        st.markdown("#### 🎯 2단계: 분석 모드 선택")
+        
+        selected_analysis_mode = st.radio(
+            "어떤 분석을 하고 싶으신가요?",
+            ANALYSIS_MODES,
+            horizontal=True,
+            key="analysis_mode_select",
+        )
+        st.session_state["analysis_mode"] = selected_analysis_mode
+        
+        st.markdown("---")
+        
+        # ===== 분석 결과 표시 =====
+        st.markdown("#### 📈 3단계: 분석 결과")
+        
+        # 기본 정보 표시
+        info_cols = st.columns(4)
+        with info_cols[0]:
+            st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
+        with info_cols[1]:
+            st.metric("목표 금액", f"{fmt_money(target_won)}원")
+        with info_cols[2]:
+            st.metric("월 적립금", f"{fmt_money(monthly_won)}원")
+        with info_cols[3]:
+            st.metric("투자 기간", f"{target_years_val:.1f}년")
+
+        st.markdown("")
+        
+        # 선택한 모드에 따라 분석
         if selected_analysis_mode == "목표 금액 달성":
-            with mode_container:
-                target_won = render_manwon_amount_input(
-                    "목표 금액",
-                    "mode2_target_amount_manwon",
-                    int(st.session_state.get("target_amount", 500000000)),
+            st.markdown("**📍 분석 모드: 목표 금액 달성**")
+            st.write("월 적립금을 고정하고, 목표 금액 달성까지 걸리는 기간을 계산합니다.")
+            
+            required_years = estimate_years_to_target(
+                target_won,
+                monthly_won,
+                current_capital,
+                avg_return=step3_avg_return,
+            )
+            
+            st.session_state["target_amount"] = target_won
+            st.session_state["monthly_contribution"] = monthly_won
+            st.session_state["current_capital"] = current_capital
+            
+            if current_capital >= target_won:
+                st.success("✅ 현재 보유 자금만으로도 목표 달성 완료!")
+            elif monthly_won <= 0:
+                st.warning("⚠️ 월 적립금이 0입니다.")
+            elif not np.isfinite(required_years) or required_years == float("inf"):
+                st.warning("⚠️ 현재 설정으로는 목표 달성이 어렵습니다. 월 적립금을 증가시켜 주세요.")
+            else:
+                total_months = int(round(required_years * 12))
+                years_calc = total_months // 12
+                months_remain = total_months % 12
+                
+                st.session_state["years"] = total_months / 12.0
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        background:linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                        border-radius:12px;
+                        padding:24px;
+                        text-align:center;
+                        color:white;
+                    ">
+                        <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">📅 예상 달성 기간</div>
+                        <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{years_calc}년 {months_remain}개월</div>
+                        <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
-                current_capital = render_manwon_amount_input(
-                    "현재 보유 자금",
-                    "mode2_current_capital_manwon",
-                    0,
-                )
-                monthly_won = render_manwon_amount_input(
-                    "월적립금",
-                    "mode2_monthly_contribution_manwon",
-                    int(st.session_state.get("monthly_contribution", 100000)),
-                )
-
-                required_years = estimate_years_to_target(target_won, monthly_won, current_capital, avg_return=step3_avg_return)
-                if not np.isfinite(required_years) or required_years == float("inf"):
-                    st.write("0년 0개월")
-                else:
-                    total_months = int(round(required_years * 12))
-                    years_calc = total_months // 12
-                    months_remain = total_months % 12
-
-                    st.session_state["target_amount"] = target_won
-                    st.session_state["monthly_contribution"] = monthly_won
-                    st.session_state["current_capital"] = current_capital
-                    st.session_state["years"] = total_months / 12.0
-
-                    # 숫자 결과만 출력 (그래프/시각화 없음)
-                    st.write(f"{years_calc}년 {months_remain}개월")
-
-        # MODE: 목표 기간 확인 (입력: 목표 금액, 투자 기간(날짜 선택))
+        
         elif selected_analysis_mode == "목표 기간 확인":
-            with mode_container:
-                target_won = render_manwon_amount_input(
-                    "목표 금액",
-                    "mode3_target_amount_manwon",
-                    int(st.session_state.get("target_amount", 500000000)),
-                )
-                current_capital = render_manwon_amount_input(
-                    "현재 보유 자금",
-                    "mode3_current_capital_manwon",
-                    0,
-                )
-
-                # 투자 기간은 날짜 선택만 사용
-                target_years_val = render_investment_period_selector(
-                    key_prefix="sim_period_mode3",
-                    section_title="투자 기간",
-                    period_label="투자 기간",
-                )
-
-                # 내부값 업데이트
-                st.session_state["target_amount"] = target_won
-                st.session_state["current_capital"] = current_capital
-                st.session_state["target_years"] = target_years_val
-                st.session_state["years"] = target_years_val
-
-                required_monthly = estimate_required_contribution(
-                    target_won,
-                    target_years_val,
-                    current_capital,
-                    avg_return=step3_avg_return,
-                )
-                if not np.isfinite(required_monthly) or required_monthly == float("inf"):
+            st.markdown("**📍 분석 모드: 목표 기간 확인**")
+            st.write("투자 기간을 고정하고, 목표 금액 달성에 필요한 월 적립금을 계산합니다.")
+            
+            required_monthly = estimate_required_contribution(
+                target_won,
+                target_years_val,
+                current_capital,
+                avg_return=step3_avg_return,
+            )
+            
+            st.session_state["target_amount"] = target_won
+            st.session_state["current_capital"] = current_capital
+            st.session_state["target_years"] = target_years_val
+            st.session_state["years"] = target_years_val
+            
+            months = int(target_years_val * 12)
+            monthly_r = step3_avg_return / 12
+            future_current_capital = current_capital * np.power(1 + monthly_r, months)
+            
+            if future_current_capital >= target_won:
+                st.success("✅ 현재 보유 자금만으로도 목표 달성 가능!")
+            else:
+                if not np.isfinite(required_monthly):
                     required_monthly_int = 0
                 else:
                     required_monthly_int = int(np.ceil(required_monthly))
+                
+                st.session_state["monthly_contribution"] = required_monthly_int
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        background:linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                        border-radius:12px;
+                        padding:24px;
+                        text-align:center;
+                        color:white;
+                    ">
+                        <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">💳 필요 월 적립금</div>
+                        <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{fmt_money(required_monthly_int)}원</div>
+                        <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-                # 숫자 결과만 출력 (그래프/시각화 없음)
-                st.write(f"{fmt_money(required_monthly_int)}원")
+        st.markdown("---")
 
         step_button_row()
 
@@ -2357,9 +2739,9 @@ def run_streamlit_app():
         current_capital = float(st.session_state.get("current_capital", 0.0))
         monthly_won = int(st.session_state.get("monthly_contribution", 0))
         recommended_mode = _recommended_investment_mode_from_profile()
-        start_date = st.session_state.get("sim_period_mode3_start", st.session_state.get("invest_period_start", date.today()))
-        if "sim_period_mode3_end" in st.session_state:
-            end_date = st.session_state["sim_period_mode3_end"]
+        start_date = st.session_state.get("unified_sim_period_start", st.session_state.get("invest_period_start", date.today()))
+        if "unified_sim_period_end" in st.session_state:
+            end_date = st.session_state["unified_sim_period_end"]
         else:
             end_date = add_calendar_years(start_date, max(1, int(np.ceil(years_sim))))
         if st.session_state.get("analysis_mode") == "목표 기간 확인":
