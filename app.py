@@ -1,7 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 import calendar
+import json
 import os
 import re
+import time
 from datetime import date
 import numpy as np
 import anthropic
@@ -10,11 +12,37 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+try:
     import yfinance as yf
 except ImportError:
     yf = None
 
-load_dotenv()
+load_dotenv(encoding="utf-8-sig")
+
+# region agent log
+DEBUG_LOG_PATH = "debug-a0c597.log"
+DEBUG_SESSION_ID = "a0c597"
+
+
+def _agent_debug_log(run_id, hypothesis_id, location, message, data):
+    try:
+        payload = {
+            "sessionId": DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as debug_file:
+            debug_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+# endregion
 
 # ============================================================
 # ETF 포트폴리오 시뮬레이션 - app.py
@@ -29,12 +57,12 @@ ETF_DATA = {
     "VOO":  {"이름": "Vanguard S&P 500 ETF",              "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
     "QQQ":  {"이름": "Invesco QQQ Trust",                   "카테고리": "지수추적", "보수율": 0.0020, "배당": True,  "레버리지": False},
     "VTI":  {"이름": "Vanguard Total Stock Market ETF",     "카테고리": "지수추적", "보수율": 0.0003, "배당": True,  "레버리지": False},
-    "SCHD": {"이름": "Schwab U.S. Dividend Equity ETF",     "카테고리": "배당형",   "보수율": 0.0006, "배당": True,  "레버리지": False},
-    "DGRO": {"이름": "iShares Core Dividend Growth ETF",    "카테고리": "배당형",   "보수율": 0.0008, "배당": True,  "레버리지": False},
-    "VYM":  {"이름": "Vanguard High Dividend Yield ETF",    "카테고리": "배당형",   "보수율": 0.0004, "배당": True,  "레버리지": False},
-    "JEPI": {"이름": "JPMorgan Equity Premium Income ETF",  "카테고리": "커버드콜", "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "JEPQ": {"이름": "JPMorgan Nasdaq Equity Premium Income ETF", "카테고리": "커버드콜", "보수율": 0.0035, "배당": True,  "레버리지": False},
-    "QYLD": {"이름": "Global X Nasdaq 100 Covered Call ETF", "카테고리": "커버드콜", "보수율": 0.0060, "배당": True,  "레버리지": False},
+    "SCHD": {"이름": "Schwab U.S. Dividend Equity ETF",     "카테고리": "배당성장",   "보수율": 0.0006, "배당": True,  "레버리지": False},
+    "DGRO": {"이름": "iShares Core Dividend Growth ETF",    "카테고리": "배당성장",   "보수율": 0.0008, "배당": True,  "레버리지": False},
+    "VYM":  {"이름": "Vanguard High Dividend Yield ETF",    "카테고리": "배당성장",   "보수율": 0.0004, "배당": True,  "레버리지": False},
+    "JEPI": {"이름": "JPMorgan Equity Premium Income ETF",  "카테고리": "배당집중", "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "JEPQ": {"이름": "JPMorgan Nasdaq Equity Premium Income ETF", "카테고리": "배당집중", "보수율": 0.0035, "배당": True,  "레버리지": False},
+    "QYLD": {"이름": "Global X Nasdaq 100 Covered Call ETF", "카테고리": "배당집중", "보수율": 0.0060, "배당": True,  "레버리지": False},
     "QLD":  {"이름": "ProShares Ultra QQQ",                 "카테고리": "레버리지", "보수율": 0.0095, "배당": False, "레버리지": True},
     "TQQQ": {"이름": "ProShares UltraPro QQQ",              "카테고리": "레버리지", "보수율": 0.0082, "배당": False, "레버리지": True},
     "SSO":  {"이름": "ProShares Ultra S&P500",              "카테고리": "레버리지", "보수율": 0.0087, "배당": False, "레버리지": True},
@@ -63,13 +91,13 @@ def load_etf_cagr():
 # 섹션 2. AI 성향 분석 함수
 # ============================================================
 
-AI_PROFILE_CATEGORIES = ["지수추적", "배당형", "커버드콜", "레버리지"]
+AI_PROFILE_CATEGORIES = ["지수추적", "배당성장", "배당집중", "레버리지"]
 
 # 포트폴리오 내 레버리지 ETF 비중 상한 (0~1)
 LEVERAGE_MAX_PORTFOLIO_WEIGHT = 0.30
 
 COVERED_CALL_EXPLANATION = """
-**커버드콜**은 쉽게 말해, 보유한 자산에서 나오는 일부 상승 기회를 대신해
+**배당집중**은 쉽게 말해, 보유한 자산에서 나오는 일부 상승 기회를 대신해
 매달 비교적 규칙적인 현금흐름(프리미엄)을 기대하는 방식입니다.
 
 - **어떻게 수익이 나나요?** → 월수익처럼 들어오는 추가 현금흐름을 노립니다.
@@ -131,7 +159,7 @@ LEVERAGE_EXPLANATION = """
 """
 
 PROFILE_METRIC_HELP = {
-    "커버드콜": (
+    "배당집중": (
         "보유 자산에 콜옵션을 매도해 프리미엄(월배당 등)을 받는 전략. "
         "급등 시 수익은 제한될 수 있습니다."
     ),
@@ -159,9 +187,9 @@ AI_PROFILE_QUESTIONS = {
             "④ 손실 위험이 커도 높은 수익을 노리고 싶다.",
         ],
         "scores": [
-            {"배당형": 2, "커버드콜": 2},
+            {"배당성장": 2, "배당집중": 2},
             {"지수추적": 3},
-            {"커버드콜": 2, "배당형": 1},
+            {"배당집중": 2, "배당성장": 1},
             {"레버리지": 3},
         ],
     },
@@ -177,10 +205,10 @@ AI_PROFILE_QUESTIONS = {
             "④ 변동이 커도 수익 기회가 크면 적극적으로 시도하고 싶다.",
         ],
         "scores": [
-            {"배당형": 1, "지수추적": 2},
+            {"배당성장": 1, "지수추적": 2},
             {"지수추적": 3},
-            {"커버드콜": 2, "배당형": 1},
-            {"커버드콜": 1, "레버리지": 2, "배당형": 1},
+            {"배당집중": 2, "배당성장": 1},
+            {"배당집중": 1, "레버리지": 2, "배당성장": 1},
         ],
     },
     "Q3": {
@@ -196,9 +224,9 @@ AI_PROFILE_QUESTIONS = {
         ],
         "scores": [
             {"지수추적": 2, "레버리지": 1},
-            {"배당형": 2, "커버드콜": 2},
-            {"지수추적": 2, "배당형": 1},
-            {"배당형": 2, "커버드콜": 1, "지수추적": 1},
+            {"배당성장": 2, "배당집중": 2},
+            {"지수추적": 2, "배당성장": 1},
+            {"배당성장": 2, "배당집중": 1, "지수추적": 1},
         ],
     },
     "Q4": {
@@ -212,8 +240,8 @@ AI_PROFILE_QUESTIONS = {
             "③ 오히려 기회라고 보고 추가 매수도 생각한다.",
         ],
         "scores": [
-            {"배당형": 3, "커버드콜": 1},
-            {"지수추적": 2, "배당형": 1},
+            {"배당성장": 3, "배당집중": 1},
+            {"지수추적": 2, "배당성장": 1},
             {"지수추적": 2, "레버리지": 2},
         ],
         "follow_up": {2: "Q5"},
@@ -242,7 +270,7 @@ AI_PROFILE_QUESTIONS = {
         ],
         "scores": [
             {"지수추적": 3},
-            {"배당형": 2, "커버드콜": 1},
+            {"배당성장": 2, "배당집중": 1},
         ],
     },
     "Q7": {
@@ -253,13 +281,13 @@ AI_PROFILE_QUESTIONS = {
         "choices": [
             "① 대표 기업들을 넓게 담아 시장 흐름 따라가기",
             "② 배당 중심으로 정기 수익 받기",
-            "③ 매달 현금흐름 중심(커버드콜 포함)",
+            "③ 매달 현금흐름 중심(배당집중 포함)",
             "④ 변동이 큰 고위험·고수익 상품",
         ],
         "scores": [
             {"지수추적": 3},
-            {"배당형": 3},
-            {"커버드콜": 3},
+            {"배당성장": 3},
+            {"배당집중": 3},
             {"레버리지": 3},
         ],
         "follow_up": {3: "Q7_SUB"},
@@ -388,8 +416,336 @@ def get_question_text_and_choices(q_key):
     return q_data["text"], q_data["choices"]
 
 
+GEMINI_PROFILE_SYSTEM_PROMPT = (
+    "투자 성향 질문 생성. 쉬운 말로 다음 질문 1개와 보기 4개를 JSON만 반환. "
+    "직접 관련 항목만 질문: 투자목표(자산성장/현금흐름), 위험감내도, 투자기간, 레버리지 허용, "
+    "배당/현금흐름 선호, 지수추적/배당성장/배당집중 선호, 투자경험, 자금상황(목돈/매달적립/둘다). "
+    "메인 질문은 총 8문항으로 구성하고, 한 번에 한 문항씩 순서대로 생성. "
+    "문항별 주제는 1번 투자목표, 2번 위험감내도, 3번 투자기간/경험, 4번 레버리지 허용, "
+    "5번 배당/현금흐름 관심, 6번 지수추적 선호, 7번 상품 이해도, 8번 자금상황으로 고정. "
+    "다른 주제는 절대 묻지 말 것. "
+    "형식: {\"question\": str, \"choices\": [str,str,str,str], \"is_complete\": bool}. "
+    "8문항 전 is_complete=false, 8문항 후 is_complete=true."
+)
+
+GEMINI_PROFILE_MODEL = "gemini-flash-lite-latest"
+GEMINI_MIN_PROFILE_QUESTIONS = 8
+GEMINI_MAX_PROFILE_QUESTIONS = 8
+GEMINI_MAX_SUBQUESTIONS_PER_MAIN = 2
+GEMINI_SUBQUESTION_RULES = {
+    4: "레버리지 허용 답변이면 2배 vs 3배 감수 가능 여부, 나스닥 vs S&P500 선호를 최대 2개까지 확인. 레버리지 거부 답변이면 하위 질문 없음.",
+    5: "배당 관심 답변이면 배당성장 vs 고배당 중심, 월배당 vs 분기배당 선호를 최대 2개까지 확인. 배당 관심 없는 답변이면 하위 질문 없음.",
+    6: "지수추적 선호 답변이면 기술주 집중(QQQ) vs 전체 분산(VTI) vs 균형(VOO)을 최대 2개까지 확인. 지수추적 선호가 아니면 하위 질문 없음.",
+    8: "목돈 있음 답변이면 거치식 vs 혼합식(목돈+적립)을 최대 2개까지 확인. 목돈 없다는 답변이면 하위 질문 없음.",
+}
+PROFILE_KEYWORD_EXPLANATIONS = [
+    {
+        "key": "leverage",
+        "keywords": ["레버리지", "2배", "3배", "TQQQ", "UPRO", "SOXL"],
+        "message": (
+            "💡 레버리지 ETF란?\n"
+            "간단히 말해:\n"
+            "- 일반 지수(예: 나스닥)를 2배 또는 3배\n"
+            "  빠르게 움직이도록 한 상품\n"
+            "- 수익도 2-3배 크지만, 손실도 2-3배 크다\n\n"
+            "⚠️ 가장 중요한 주의사항 - \"일일 변동성\"\n"
+            "레버리지 ETF는 매일매일 정산되기 때문입니다.\n\n"
+            "쉬운 예시:\n"
+            "지수가 상승 +10% → 하락 -10% → 다시 +10% 반복된다면?\n\n"
+            "일반 ETF (예: QQQ):\n"
+            "전체 손실 없음 (원점 복귀) ✓\n\n"
+            "레버리지 ETF (TQQQ 3배):\n"
+            "매번 정산되면서 조금씩 손실 발생...\n"
+            "결과: 원점에서 약간 손실 ✗\n\n"
+            "😱 음의 복리란?\n"
+            "이게 바로 \"음의 복리\"예요.\n\n"
+            "일반 복리는 수익이 쌓이는 것:\n"
+            "100만원 → +10% → 110만원\n"
+            "110만원 → +10% → 121만원 (이익이 이익을 낳음)\n\n"
+            "음의 복리는 손실이 쌓이는 것:\n"
+            "100만원 → +30% → 130만원\n"
+            "130만원 → -30% → 91만원\n"
+            "(원금 100만원인데 91만원으로 줄어듦!)\n\n"
+            "레버리지는 이 효과가 3배라\n"
+            "횡보장에서 특히 손실이 커요."
+        ),
+    },
+    {
+        "key": "covered_call",
+        "keywords": ["커버드콜", "배당집중", "JEPI", "JEPQ", "QYLD", "월배당"],
+        "message": COVERED_CALL_EXPLANATION,
+    },
+    {
+        "key": "dividend_growth",
+        "keywords": ["배당성장", "배당", "SCHD", "DGRO", "VYM"],
+        "message": (
+            "💡 배당이란?\n"
+            "배당이란 기업이 이익의 일부를 주주에게\n"
+            "현금으로 나눠주는 것이에요.\n"
+            "예를 들어 삼성전자 주식 100주를 가지고 있으면\n"
+            "1년에 몇 만원씩 통장으로 입금되는 방식이에요."
+        ),
+    },
+]
+
+
+def _extract_json_object(text):
+    if not text:
+        raise ValueError("Gemini 응답이 비어 있습니다.")
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("Gemini JSON 응답을 찾지 못했습니다.")
+    return json.loads(cleaned[start:end + 1])
+
+
+def _get_gemini_model():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if genai is None or not api_key:
+        return None
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(GEMINI_PROFILE_MODEL)
+
+
+def _render_profile_keyword_explanations(text_parts, context_key):
+    shown = st.session_state.setdefault("profile_keyword_explanations_shown", set())
+    contexts = st.session_state.setdefault("profile_keyword_explanation_contexts", {})
+    combined_text = " ".join(str(part) for part in text_parts if part)
+    matched_keys = set()
+
+    for explanation in PROFILE_KEYWORD_EXPLANATIONS:
+        if any(keyword in combined_text for keyword in explanation["keywords"]):
+            matched_keys.add(explanation["key"])
+
+    if "covered_call" in matched_keys and "dividend_growth" in matched_keys:
+        matched_keys.remove("dividend_growth")
+
+    for explanation in PROFILE_KEYWORD_EXPLANATIONS:
+        if explanation["key"] in matched_keys:
+            if explanation["key"] not in shown:
+                shown.add(explanation["key"])
+                contexts[explanation["key"]] = context_key
+            elif explanation["key"] not in contexts:
+                contexts[explanation["key"]] = context_key
+
+            if contexts.get(explanation["key"]) == context_key:
+                st.info(explanation["message"])
+
+
+def _profile_answers_for_gemini(responses, questions, subquestions=None):
+    answers = []
+    subquestions = subquestions or {}
+    for idx, question_data in enumerate(questions, start=1):
+        q_key = f"G{idx}"
+        if q_key not in responses:
+            continue
+        choice_idx = responses[q_key]
+        choices = question_data.get("choices", [])
+        choice_text = choices[choice_idx] if isinstance(choice_idx, int) and 0 <= choice_idx < len(choices) else ""
+        answer_data = {
+            "question_number": idx,
+            "question": question_data.get("question", ""),
+            "answer": choice_text,
+        }
+        sub_state = subquestions.get(q_key, {})
+        sub_answers = []
+        for sub_idx, sub_data in enumerate(sub_state.get("items", []), start=1):
+            sub_answer_idx = sub_data.get("answer")
+            sub_choices = sub_data.get("choices", [])
+            if isinstance(sub_answer_idx, int) and 0 <= sub_answer_idx < len(sub_choices):
+                sub_answers.append({
+                    "question_number": sub_idx,
+                    "question": sub_data.get("question", ""),
+                    "answer": sub_choices[sub_answer_idx],
+                })
+        if sub_answers:
+            answer_data["sub_answers"] = sub_answers
+        answers.append(answer_data)
+    return answers
+
+
+def _generate_gemini_profile_question(answers, next_question_number):
+    model = _get_gemini_model()
+    if model is None:
+        raise RuntimeError("Gemini API를 사용할 수 없습니다.")
+
+    prompt = (
+        f"{GEMINI_PROFILE_SYSTEM_PROMPT}\n"
+        f"문항번호: {next_question_number}\n"
+        f"이전답변: {json.dumps(answers, ensure_ascii=False, separators=(',', ':'))}"
+    )
+    response = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    data = _extract_json_object(getattr(response, "text", ""))
+    question = str(data.get("question", "")).strip()
+    choices = data.get("choices", [])
+    if not question or not isinstance(choices, list) or len(choices) != 4:
+        raise ValueError("Gemini 질문 형식이 올바르지 않습니다.")
+    return {
+        "question": question,
+        "choices": [str(choice).strip() for choice in choices],
+        "is_complete": bool(data.get("is_complete", False)) and next_question_number > GEMINI_MIN_PROFILE_QUESTIONS,
+    }
+
+
+def _generate_gemini_profile_subquestion(answers, main_question_number, main_question, main_answer, sub_answers):
+    model = _get_gemini_model()
+    if model is None:
+        raise RuntimeError("Gemini API를 사용할 수 없습니다.")
+
+    prompt = (
+        "투자 성향 분석의 같은 페이지 하위 질문 필요 여부를 판단하고 JSON만 반환. "
+        "하위 질문은 메인 4번, 5번, 6번, 8번에서만 가능. "
+        "이전 답변 맥락과 현재 메인 답변을 보고, 아래 현재 문항 규칙에 맞을 때만 하위 질문 1개와 보기 4개를 생성. "
+        "현재 메인 답변이 규칙의 조건에 해당하지 않으면 반드시 needs_sub_question=false. "
+        "이미 하위 답변으로 충분히 확인된 내용은 반복 질문하지 말 것. "
+        "하위 질문은 현재 메인 문항당 최대 2개까지만 필요하다고 판단. "
+        "필요 없으면 needs_sub_question=false. "
+        "형식: {\"needs_sub_question\": bool, \"question\": str, \"choices\": [str,str,str,str]}.\n"
+        f"현재문항번호: {main_question_number}\n"
+        f"현재문항규칙: {GEMINI_SUBQUESTION_RULES.get(main_question_number, '하위 질문 없음')}\n"
+        f"이전답변: {json.dumps(answers, ensure_ascii=False, separators=(',', ':'))}\n"
+        f"현재메인질문: {main_question}\n"
+        f"현재메인답변: {main_answer}\n"
+        f"이미받은하위답변: {json.dumps(sub_answers, ensure_ascii=False, separators=(',', ':'))}"
+    )
+    response = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    data = _extract_json_object(getattr(response, "text", ""))
+    if not bool(data.get("needs_sub_question", False)):
+        return {"needs_sub_question": False}
+
+    question = str(data.get("question", "")).strip()
+    choices = data.get("choices", [])
+    if not question or not isinstance(choices, list) or len(choices) != 4:
+        raise ValueError("Gemini 하위 질문 형식이 올바르지 않습니다.")
+    return {
+        "needs_sub_question": True,
+        "question": question,
+        "choices": [str(choice).strip() for choice in choices],
+    }
+
+
+def _generate_gemini_profile_result(answers):
+    model = _get_gemini_model()
+    if model is None:
+        raise RuntimeError("Gemini API를 사용할 수 없습니다.")
+
+    prompt = (
+        "답변으로 최종 투자 성향을 JSON만 반환. "
+        "profile_weights는 지수추적/배당성장/배당집중/레버리지 합계 100, "
+        "leverage_allowed boolean, funding_situation은 has_lump_sum/can_monthly_invest boolean. "
+        "buy_mode는 목돈만 있으면 거치식, 매달 적립만 가능하면 적립식, 둘 다면 혼합식.\n"
+        f"답변: {json.dumps(answers, ensure_ascii=False, separators=(',', ':'))}"
+    )
+    response = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    data = _extract_json_object(getattr(response, "text", ""))
+    raw_weights = data.get("profile_weights", {})
+    weights = {cat: max(0.0, float(raw_weights.get(cat, 0))) for cat in AI_PROFILE_CATEGORIES}
+    total = sum(weights.values())
+    if total <= 0:
+        raise ValueError("Gemini 최종 비율이 올바르지 않습니다.")
+    weights = {cat: round((weights[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
+    weights["_leverage_allowed"] = bool(data.get("leverage_allowed", weights.get("레버리지", 0) > 0))
+    funding = data.get("funding_situation", {})
+    return weights, {
+        "has_lump_sum": bool(funding.get("has_lump_sum", True)),
+        "can_monthly_invest": bool(funding.get("can_monthly_invest", True)),
+        "buy_mode": str(data.get("buy_mode", "")).strip(),
+    }
+
+
+def _generate_gemini_step4_analysis(profile_weights, selected_etfs, investment_method, target_amount, years):
+    model = _get_gemini_model()
+    if model is None:
+        raise RuntimeError("Gemini API를 사용할 수 없습니다.")
+
+    prompt = f"""당신은 주식 투자 전문가이자 
+친절한 재테크 멘토입니다.
+
+주식을 한 번도 해본 적 없는 완전 초보자에게
+아래 내용을 설명해주세요:
+
+1. 이 사람의 투자 성향이 어떤 타입인지
+   (예: 공격적 성장형, 안정적 배당형 등)
+
+2. 왜 이 매수 방식 (거치식/적립식/혼합식)이
+   이 사람에게 맞는지 이유 설명
+
+3. 이 투자 기간 동안 가져야 할 마인드셋
+   (예: 단기 하락에 흔들리지 않는 법,
+    장기 복리의 힘 등)
+
+4. 초보 투자자가 이 포트폴리오로 
+   투자할 때 알아야 할 것들
+
+전문용어는 그대로 쓰되
+반드시 괄호로 쉬운 설명 추가.
+예: ETF(여러 주식을 한 번에 담은 바구니)
+친근하고 따뜻한 말투.
+너무 길지 않게 핵심만.
+
+성향 분석 결과: {profile_weights}
+추천 ETF: {selected_etfs}
+매수 방식: {investment_method}
+목표 금액: {target_amount}원
+투자 기간: {years}년"""
+
+    response = model.generate_content(prompt)
+    result = getattr(response, "text", "").strip()
+    if not result:
+        raise ValueError("Gemini 응답이 비어 있습니다.")
+    return result
+
+
+def _default_step4_analysis_text(profile_weights, selected_etfs, investment_method, target_amount, years):
+    top_profile = max(
+        ((cat, profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES),
+        key=lambda item: item[1],
+    )[0]
+    return (
+        f"현재 성향은 **{top_profile} 중심형**에 가깝습니다. "
+        f"추천 ETF(여러 주식을 한 번에 담은 바구니)는 {', '.join(selected_etfs)}이며, "
+        f"매수 방식은 **{investment_method}**입니다.\n\n"
+        f"목표 금액은 {target_amount:,}원, 투자 기간은 {years:g}년입니다. "
+        "초보 투자자는 단기 하락에 너무 흔들리기보다 정해 둔 기간 동안 꾸준히 유지하는 마음가짐이 중요합니다. "
+        "ETF도 원금 손실 가능성이 있으므로 비상금은 따로 두고, 투자 금액과 비중을 정기적으로 확인해 주세요."
+    )
+
+
+def _funding_situation_to_q8(funding):
+    has_lump_sum = funding.get("has_lump_sum", True)
+    can_monthly = funding.get("can_monthly_invest", True)
+    if has_lump_sum and can_monthly:
+        return 0
+    if has_lump_sum and not can_monthly:
+        return 1
+    return 2
+
+
+def _activate_fixed_profile_fallback():
+    st.session_state["profile_ai_fallback"] = True
+    st.session_state["current_question"] = "Q1"
+    st.session_state["profile_responses"] = {}
+    st.session_state["gemini_profile_questions"] = []
+    st.session_state["gemini_profile_subquestions"] = {}
+    st.session_state["profile_keyword_explanations_shown"] = set()
+    st.session_state["profile_keyword_explanation_contexts"] = {}
+
+
 def render_profile_metrics(profile_weights):
-    """투자 성향 비율과 커버드콜 설명을 표시합니다."""
+    """투자 성향 비율과 배당집중 설명을 표시합니다."""
     cols = st.columns(len(AI_PROFILE_CATEGORIES))
     for i, cat in enumerate(AI_PROFILE_CATEGORIES):
         with cols[i]:
@@ -398,7 +754,7 @@ def render_profile_metrics(profile_weights):
                 f"{profile_weights.get(cat, 0)}%",
                 help=PROFILE_METRIC_HELP.get(cat),
             )
-    with st.expander("💡 커버드콜이란? (처음이시라면 읽어보세요)"):
+    with st.expander("💡 배당집중이란? (처음이시라면 읽어보세요)"):
         st.markdown(COVERED_CALL_EXPLANATION)
     with st.expander("💡 레버리지 ETF란? (처음이시라면 읽어보세요)"):
         st.markdown(LEVERAGE_EXPLANATION)
@@ -409,8 +765,8 @@ def render_profile_metrics(profile_weights):
 
 CATEGORY_TO_ETFS = {
     "지수추적": ["VOO", "QQQ", "VTI"],
-    "배당형": ["SCHD", "DGRO", "VYM"],
-    "커버드콜": ["JEPI", "JEPQ", "QYLD"],
+    "배당성장": ["SCHD", "DGRO", "VYM"],
+    "배당집중": ["JEPI", "JEPQ", "QYLD"],
     "레버리지": ["TQQQ", "UPRO", "SOXL", "QLD", "SSO"],
 }
 
@@ -563,9 +919,9 @@ ETF_SUMMARY_DESCRIPTIONS = {
     "SCHD": "미국 배당성장주 묶음",
     "DGRO": "배당이 늘어나는 기업 위주",
     "VYM": "배당 수익 위주",
-    "JEPI": "대형주 + 커버드콜 · 월배당",
-    "JEPQ": "기술 대형주 + 커버드콜 · 월배당",
-    "QYLD": "기술 지수 + 커버드콜 · 월배당",
+    "JEPI": "대형주 + 배당집중 · 월배당",
+    "JEPQ": "기술 대형주 + 배당집중 · 월배당",
+    "QYLD": "기술 지수 + 배당집중 · 월배당",
     "QLD": "기술 지수 · 2배 레버리지",
     "TQQQ": "기술 지수 · 3배 레버리지",
     "SSO": "미국 대형주 지수 · 2배 레버리지",
@@ -578,8 +934,8 @@ ETF_CARD_DESCRIPTIONS = ETF_SUMMARY_DESCRIPTIONS
 
 CATEGORY_DISPLAY_LABELS = {
     "지수추적": "지수추종형",
-    "배당형": "배당형",
-    "커버드콜": "커버드콜형",
+    "배당성장": "배당성장형",
+    "배당집중": "배당집중형",
     "레버리지": "레버리지형",
 }
 
@@ -639,7 +995,7 @@ ETF_DETAIL_GUIDE = {
         "caution": "금리와 경기 흐름에 따라 배당주가 약세를 보일 수 있습니다.",
     },
     "JEPI": {
-        "intro": "주식 포지션에 옵션 전략을 결합해 월 단위 현금흐름을 추구하는 커버드콜 상품입니다.",
+        "intro": "주식 포지션에 옵션 전략을 결합해 월 단위 현금흐름을 추구하는 배당집중 상품입니다.",
         "recommended_for": [
             "매달 들어오는 수익 흐름이 중요한 분",
             "큰 급등보다 안정적 흐름을 선호하는 분",
@@ -648,16 +1004,16 @@ ETF_DETAIL_GUIDE = {
         "caution": "강한 상승장에서는 주가 상승 이익 일부를 놓칠 수 있습니다.",
     },
     "JEPQ": {
-        "intro": "기술 대형주 기반에 커버드콜 전략을 적용해 현금흐름을 강화한 상품입니다.",
+        "intro": "기술 대형주 기반에 배당집중 전략을 적용해 현금흐름을 강화한 상품입니다.",
         "recommended_for": [
             "기술주 노출 + 월수익을 같이 원하는 분",
-            "배당형보다 높은 변동성도 감수 가능한 분",
+            "배당성장보다 높은 변동성도 감수 가능한 분",
         ],
         "top_holdings": ["Microsoft", "Apple", "NVIDIA"],
         "caution": "기술주 변동성과 옵션 구조 영향으로 가격이 빠르게 출렁일 수 있습니다.",
     },
     "QYLD": {
-        "intro": "기술 지수 기반 커버드콜 전략으로 월수익 흐름을 우선하는 성격의 상품입니다.",
+        "intro": "기술 지수 기반 배당집중 전략으로 월수익 흐름을 우선하는 성격의 상품입니다.",
         "recommended_for": [
             "현금흐름 우선 투자자",
             "가격 상승보다 월배당 성향을 선호하는 분",
@@ -771,6 +1127,21 @@ def _get_live_etf_snapshot(ticker):
         }
     except Exception:
         return {}
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_etf_dividend_yield(ticker):
+    if yf is None:
+        return None
+
+    try:
+        dividend_yield = (yf.Ticker(ticker).info or {}).get("dividendYield")
+        if dividend_yield is None:
+            return None
+        dividend_yield = float(dividend_yield)
+        return dividend_yield / 100 if dividend_yield > 1 else dividend_yield
+    except Exception:
+        return None
 
 
 def _etf_card_html(ticker, is_selected=False):
@@ -896,8 +1267,8 @@ def _apply_etf_replace(slot_idx, old_ticker, replace_options):
 
 SIMULATION_BASE_STATS = {
     "지수추적": {"mu": 0.075, "sigma": 0.15},
-    "배당형": {"mu": 0.055, "sigma": 0.12},
-    "커버드콜": {"mu": 0.050, "sigma": 0.10},
+    "배당성장": {"mu": 0.055, "sigma": 0.12},
+    "배당집중": {"mu": 0.050, "sigma": 0.10},
     "레버리지": {"mu": 0.075, "sigma": 0.15},
 }
 
@@ -1236,7 +1607,7 @@ def plot_rebalance_comparison(summary, title="Buy&Hold vs 리밸런싱 vs DCA"):
     return fig
 
 
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_voo_daily_return_profile():
     if yf is None:
         raise RuntimeError("yfinance가 설치되어 있지 않습니다.")
@@ -1269,47 +1640,60 @@ def _leverage_multiplier(ticker):
     return 1
 
 
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _simulate_daily_to_monthly_median_path(
-    mu_daily,
-    sigma_daily,
-    month_end_dates,
-    weights,
+    annual_return,
+    annual_volatility,
+    month_end_date_keys,
     initial_capital,
     monthly_contribution,
     mode,
-    use_leverage=True,
-    trials=200,
+    trials=100,
 ):
+    month_end_dates = tuple(pd.Timestamp(date_key) for date_key in month_end_date_keys)
     months = len(month_end_dates) - 1
     paths = np.zeros((trials, months + 1))
     paths[:, 0] = initial_capital if mode != "적립형" else 0.0
-    normalized_weights = _normalize_weights(weights)
+    business_days_by_month = [
+        max(
+            1,
+            len(pd.bdate_range(
+                month_end_dates[month - 1] + pd.Timedelta(days=1),
+                month_end_dates[month],
+            )),
+        )
+        for month in range(1, months + 1)
+    ]
+    daily_mu = annual_return / 252
+    daily_sigma = annual_volatility / np.sqrt(252)
 
-    for trial in range(trials):
-        value = paths[trial, 0]
-        for month in range(1, months + 1):
-            if mode in {"적립형", "혼합형"}:
-                value += monthly_contribution
-            days = max(
-                1,
-                len(pd.bdate_range(
-                    month_end_dates[month - 1] + pd.Timedelta(days=1),
-                    month_end_dates[month],
-                )),
-            )
-            for _ in range(days):
-                base_daily_return = np.random.normal(mu_daily, sigma_daily)
-                portfolio_daily_return = 0.0
-                for ticker, weight in normalized_weights.items():
-                    multiplier = _leverage_multiplier(ticker) if use_leverage else 1
-                    portfolio_daily_return += weight * (base_daily_return * multiplier)
-                value *= 1 + max(portfolio_daily_return, -0.99)
-            paths[trial, month] = value
+    values = paths[:, 0].copy()
+    for month, days in enumerate(business_days_by_month, start=1):
+        if mode in {"적립형", "혼합형"}:
+            values += monthly_contribution
+        portfolio_daily_returns = np.maximum(
+            np.random.normal(daily_mu, daily_sigma, size=(trials, days)),
+            -0.99,
+        )
+        values *= np.prod(1 + portfolio_daily_returns, axis=1)
+        paths[:, month] = values
 
     median_final = np.percentile(paths[:, -1], 50)
     median_path_idx = int(np.argmin(np.abs(paths[:, -1] - median_final)))
     return paths[median_path_idx]
+
+
+def _weighted_portfolio_return_profile(weight_items):
+    normalized_weights = _normalize_weights(dict(weight_items))
+    annual_return = sum(
+        weight * ETF_DATA[ticker].get("cagr", _get_ticker_return_profile(ticker)[0])
+        for ticker, weight in normalized_weights.items()
+    )
+    annual_volatility = sum(
+        weight * _get_ticker_return_profile(ticker)[1]
+        for ticker, weight in normalized_weights.items()
+    )
+    return float(annual_return), float(annual_volatility)
 
 
 def _detect_drawdown_marker_indices(values, threshold=-0.15):
@@ -1341,7 +1725,6 @@ def _detect_drawdown_marker_indices(values, threshold=-0.15):
     return sorted(marker_indices)
 
 
-@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def plot_portfolio_vs_sp500_monte_carlo(
     port_weights,
     start_date,
@@ -1351,37 +1734,65 @@ def plot_portfolio_vs_sp500_monte_carlo(
     recommended_mode,
     title="내 포트폴리오 vs S&P500 기준선",
 ):
+    return _plot_portfolio_vs_sp500_monte_carlo_cached(
+        _portfolio_weight_items(port_weights),
+        _date_cache_key(start_date),
+        _date_cache_key(end_date),
+        float(initial_capital),
+        float(monthly_contribution),
+        recommended_mode,
+        title,
+    )
+
+
+def _portfolio_weight_items(weights):
+    return tuple(sorted((ticker, float(weight)) for ticker, weight in weights.items()))
+
+
+def _date_cache_key(value):
+    return pd.Timestamp(value).date().isoformat()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _plot_portfolio_vs_sp500_monte_carlo_cached(
+    port_weight_items,
+    start_date_key,
+    end_date_key,
+    initial_capital,
+    monthly_contribution,
+    recommended_mode,
+    title,
+):
+    port_weights = dict(port_weight_items)
+    start_date = pd.Timestamp(start_date_key).date()
+    end_date = pd.Timestamp(end_date_key).date()
     months = max(1, int(round(period_between_dates_years(start_date, end_date) * 12)))
     monthly_dates = [pd.Timestamp(start_date) + pd.DateOffset(months=i) for i in range(months + 1)]
     monthly_dates[-1] = pd.Timestamp(end_date)
-    voo_mu_daily, voo_sigma_daily = load_voo_daily_return_profile()
+    month_end_date_keys = tuple(_date_cache_key(month_date) for month_date in monthly_dates)
+    _, voo_sigma_daily = load_voo_daily_return_profile()
+    portfolio_return, portfolio_volatility = _weighted_portfolio_return_profile(port_weight_items)
+    voo_return = ETF_DATA["VOO"].get("cagr", _get_ticker_return_profile("VOO")[0])
+    voo_volatility = voo_sigma_daily * np.sqrt(252)
 
     portfolio_median = _simulate_daily_to_monthly_median_path(
-        voo_mu_daily,
-        voo_sigma_daily,
-        monthly_dates,
-        port_weights,
+        portfolio_return,
+        portfolio_volatility,
+        month_end_date_keys,
         initial_capital,
         monthly_contribution,
         recommended_mode,
-        use_leverage=True,
-        trials=200,
+        trials=100,
     )
     sp500_median = _simulate_daily_to_monthly_median_path(
-        voo_mu_daily,
-        voo_sigma_daily,
-        monthly_dates,
-        {"VOO": 1.0},
+        voo_return,
+        voo_volatility,
+        month_end_date_keys,
         initial_capital,
         monthly_contribution,
-        "혼합형",
-        use_leverage=False,
-        trials=200,
+        recommended_mode,
+        trials=100,
     )
-
-    annual_idx = list(range(0, months + 1, 12))
-    if annual_idx[-1] != months:
-        annual_idx.append(months)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -1393,14 +1804,6 @@ def plot_portfolio_vs_sp500_monte_carlo(
         hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}원<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=[monthly_dates[i] for i in annual_idx],
-        y=[portfolio_median[i] for i in annual_idx],
-        mode="markers",
-        name="내 포트폴리오 연간 지점",
-        marker=dict(color="#2563eb", size=7),
-        hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}원<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
         x=monthly_dates,
         y=sp500_median,
         mode="lines",
@@ -1408,31 +1811,23 @@ def plot_portfolio_vs_sp500_monte_carlo(
         line=dict(color="#9ca3af", width=3),
         hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}원<extra></extra>",
     ))
-    fig.add_trace(go.Scatter(
-        x=[monthly_dates[i] for i in annual_idx],
-        y=[sp500_median[i] for i in annual_idx],
-        mode="lines+markers",
-        name="S&P500 기준선",
-        line=dict(color="rgba(0,0,0,0)"),
-        marker=dict(color="#9ca3af", size=7),
-        showlegend=False,
-        hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}원<extra></extra>",
-    ))
 
     monthly_changes = np.diff(portfolio_median) / np.maximum(portfolio_median[:-1], 1)
+    y_midpoint = (float(np.min(portfolio_median)) + float(np.max(portfolio_median))) / 2
     for idx, monthly_change in enumerate(monthly_changes, start=1):
         if monthly_change <= -0.15:
+            annotation_ay = 90 if portfolio_median[idx] >= y_midpoint else -90
             fig.add_annotation(
                 x=monthly_dates[idx],
                 y=portfolio_median[idx],
-                text="급락 구간: 추가 매수 기회입니다.<br>여유 현금이 있다면 지금 더 투자하세요!",
+                text="급락 구간",
                 showarrow=True,
                 arrowhead=3,
                 arrowsize=1,
                 arrowwidth=2,
                 arrowcolor="#dc2626",
                 ax=0,
-                ay=-70,
+                ay=annotation_ay,
                 font=dict(color="#dc2626", size=12),
                 bgcolor="rgba(255,255,255,0.9)",
                 bordercolor="#dc2626",
@@ -1634,11 +2029,11 @@ def build_strategy_reason(profile_weights, selected_etfs, analysis_mode):
     top_pct = _max_profile_pct(profile_weights)
     if profile_weights.get("지수추적", 0) >= top_pct:
         reasons.append("지수추적 성향을 반영해 시장 지수 ETF를 중심으로 구성했습니다.")
-    if profile_weights.get("배당형", 0) >= top_pct:
+    if profile_weights.get("배당성장", 0) >= top_pct:
         reasons.append("배당 성향이 높아 안정적인 배당 ETF를 포함했습니다.")
-    if profile_weights.get("커버드콜", 0) >= top_pct:
+    if profile_weights.get("배당집중", 0) >= top_pct:
         reasons.append(
-            "커버드콜 성향을 반영해 옵션 프리미엄·월배당형 ETF를 포함했습니다. "
+            "배당집중 성향을 반영해 옵션 프리미엄·월배당형 ETF를 포함했습니다. "
             "급등 구간에서는 수익이 제한될 수 있습니다."
         )
     if profile_weights.get("레버리지", 0) >= top_pct:
@@ -1842,10 +2237,15 @@ def run_streamlit_app():
 
     if "app_step" not in st.session_state:
         st.session_state["app_step"] = 1
-        st.session_state["current_question"] = "Q1"
+        st.session_state["current_question"] = "G1"
         st.session_state["profile_responses"] = {}  # {Q_KEY: choice_index}
         st.session_state["profile_submitted"] = False
         st.session_state["profile_weights"] = None
+        st.session_state["gemini_profile_questions"] = []
+        st.session_state["gemini_profile_subquestions"] = {}
+        st.session_state["profile_keyword_explanations_shown"] = set()
+        st.session_state["profile_keyword_explanation_contexts"] = {}
+        st.session_state["profile_ai_fallback"] = False
         st.session_state["selected_etfs"] = []
         st.session_state["analysis_mode"] = ANALYSIS_MODES[0]
         st.session_state["current_capital"] = 10000000.0
@@ -1882,6 +2282,30 @@ def run_streamlit_app():
         st.session_state.clear()
         st.rerun()
 
+    def activate_admin_mode():
+        """개발 확인용: 질문을 건너뛰고 랜덤 포트폴리오로 STEP2에 진입합니다."""
+        rng = np.random.default_rng()
+        random_profile = rng.dirichlet(np.ones(len(AI_PROFILE_CATEGORIES))) * 100
+        profile_weights = {
+            category: round(float(weight), 2)
+            for category, weight in zip(AI_PROFILE_CATEGORIES, random_profile)
+        }
+        profile_weights["_leverage_allowed"] = True
+
+        random_etfs = list(rng.choice(list(ETF_DATA.keys()), size=5, replace=False))
+        random_weights = rng.dirichlet(np.ones(len(random_etfs)))
+
+        st.session_state["profile_weights"] = profile_weights
+        st.session_state["profile_responses"] = {"Q8": int(rng.integers(0, 3))}
+        st.session_state["profile_submitted"] = True
+        st.session_state["selected_etfs"] = random_etfs
+        st.session_state["etf_weights"] = {
+            ticker: float(weight)
+            for ticker, weight in zip(random_etfs, random_weights)
+        }
+        st.session_state["app_step"] = 2
+        st.rerun()
+
     def step_button_row(can_next=True, can_prev=True):
         cols = st.columns([2, 2, 1])
         if can_prev:
@@ -1899,93 +2323,144 @@ def run_streamlit_app():
 
     if current_step == 1:
         st.write("쉬운 질문에 답하면 투자 성향에 맞는 상품 유형을 추천해 드립니다. (종목 코드는 결과 화면에서 확인할 수 있습니다.)")
-        
-        current_q = st.session_state.get("current_question", "Q1")
+
         responses = st.session_state.get("profile_responses", {})
-        
-        # 현재 질문 텍스트와 선택지 가져오기
-        q_text, q_choices = get_question_text_and_choices(current_q)
-        
-        if q_text is None:
-            # 모든 질문 완료
-            st.success("✅ 모든 질문을 완료했습니다!")
-            profile_weights = calculate_profile_scores(responses)
-            st.session_state["profile_weights"] = profile_weights
-            st.session_state["profile_submitted"] = True
-            
-            # 분석 결과 표시
-            st.write("### 투자 성향 분석 결과")
-            render_profile_metrics(profile_weights)
-            
-            if st.button("STEP2로 이동", key="proceed_to_step2"):
-                st.session_state["app_step"] = 2
+        if st.session_state.get("profile_ai_fallback", False) and _get_gemini_model() is not None and not responses:
+            st.session_state["profile_ai_fallback"] = False
+            st.session_state["current_question"] = "G1"
+            st.session_state["gemini_profile_questions"] = []
+            st.session_state["gemini_profile_subquestions"] = {}
+            st.rerun()
+
+        if not st.session_state.get("profile_ai_fallback", False):
+            gemini_questions = st.session_state.setdefault("gemini_profile_questions", [])
+            if not gemini_questions:
+                try:
+                    first_question = _generate_gemini_profile_question([], 1)
+                    gemini_questions.append(first_question)
+                    st.session_state["current_question"] = "G1"
+                except Exception as exc:
+                    _activate_fixed_profile_fallback()
+                    st.warning(f"Gemini 질문 생성에 실패해 기존 고정 질문으로 진행합니다. ({type(exc).__name__}: {exc})")
+                    st.rerun()
+
+            current_q = st.session_state.get("current_question", "G1")
+            if not str(current_q).startswith("G"):
+                st.session_state["current_question"] = "G1"
+                st.session_state["profile_responses"] = {}
+                responses = st.session_state["profile_responses"]
+                current_q = "G1"
+            try:
+                current_idx = max(0, int(str(current_q).replace("G", "")) - 1)
+            except ValueError:
+                current_idx = 0
+
+            if current_idx >= len(gemini_questions):
+                st.session_state["current_question"] = f"G{len(gemini_questions)}"
                 st.rerun()
-        else:
-            q_data = AI_PROFILE_QUESTIONS[current_q]
-            is_multi = _is_multi_select_question(current_q)
 
-            # 질문 제목과 텍스트
-            st.write(q_text)
-            
-            # 진행 상황
-            completed = len(responses)
-            total_questions = count_total_profile_questions(responses)
-            st.write(f"진행 상황: {completed}/{total_questions}")
-            
-            # 질문별 설명 또는 힌트
-            if current_q == "Q1":
-                st.info("💡 이 질문은 당신의 가장 중요한 투자 목표를 파악합니다.")
-            elif current_q == "Q3":
-                st.info("💡 현금이 들어오는 느낌과 자산이 커지는 느낌 중 어느 것이 더 좋은지 선택해 주세요.")
-            elif current_q == "Q4":
-                st.warning("⚠️ 이 질문은 당신의 위험 감수 능력을 파악하는 중요한 질문입니다.")
-            elif current_q == "Q5":
-                st.info("💡 Q4의 답변에 따라 나타나는 심화 질문입니다.")
-            elif current_q == "Q7":
-                st.markdown(
-                    """
-                    <div style="background-color:#f0f7ff;padding:12px;border-left:4px solid #1f77b4;border-radius:4px;margin-bottom:16px;">
-                    <strong>💡 알아두세요:</strong> <strong>커버드콜</strong>은 월배당처럼 정기적인 현금흐름을 받는 전략입니다. 
-                    <strong>레버리지 ETF</strong>는 2-3배 움직이는 고위험 상품입니다.
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-            elif current_q == "Q7_SUB":
-                st.markdown(
-                    """
-                    <div style="background-color:#fff3cd;padding:12px;border-left:4px solid #ff9800;border-radius:4px;margin-bottom:16px;">
-                    <strong>⚠️ 레버리지 ETF 이해도 측정:</strong> 아래 질문을 통해 당신의 이해도를 파악하고 적절한 비중을 추천합니다.
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                with st.expander("📖 레버리지 ETF 간단 설명 보기"):
-                    st.markdown(LEVERAGE_EXPLANATION)
+            q_data = gemini_questions[current_idx]
+            q_choices = q_data["choices"]
+            main_question_number = current_idx + 1
+            can_have_subquestions = main_question_number in GEMINI_SUBQUESTION_RULES
+            st.write(f"**Q{current_idx + 1}. {q_data['question']}**")
+            st.write(f"진행 상황: {len(responses)}/{GEMINI_MIN_PROFILE_QUESTIONS} (최대 {GEMINI_MAX_PROFILE_QUESTIONS}문항)")
+            _render_profile_keyword_explanations([q_data["question"], *q_choices], current_q)
 
-            if is_multi:
-                max_select = q_data.get("max_select", PROFILE_MULTI_SELECT_MAX)
-                st.caption(f"해당되는 항목을 **최소 1개, 최대 {max_select}개**까지 선택하세요.")
-                saved = responses.get(current_q, [])
-                if not isinstance(saved, list):
-                    saved = []
-                selected_indices = st.multiselect(
-                    "선택 (복수)",
-                    options=list(range(len(q_choices))),
-                    default=saved,
-                    format_func=lambda i: q_choices[i],
-                    max_selections=max_select,
-                    key=f"choice_{current_q}",
-                    label_visibility="collapsed",
-                )
-            else:
-                selected_indices = st.radio(
-                    "선택지",
-                    range(len(q_choices)),
-                    format_func=lambda i: q_choices[i],
-                    index=responses.get(current_q, 0) if current_q in responses else 0,
-                    key=f"choice_{current_q}",
-                    label_visibility="collapsed",
+            selected_index = st.radio(
+                "선택지",
+                range(len(q_choices)),
+                format_func=lambda i: q_choices[i],
+                index=responses.get(current_q) if current_q in responses else None,
+                key=f"choice_{current_q}",
+                label_visibility="collapsed",
+            )
+
+            subquestions = st.session_state.setdefault("gemini_profile_subquestions", {})
+            sub_state = subquestions.get(current_q)
+            sub_complete = selected_index is not None
+
+            if selected_index is not None:
+                previous_answer = st.session_state["profile_responses"].get(current_q)
+                if previous_answer != selected_index:
+                    st.session_state["profile_responses"][current_q] = selected_index
+                    sub_state = {
+                        "main_answer": selected_index,
+                        "items": [],
+                        "complete": not can_have_subquestions,
+                    }
+                    subquestions[current_q] = sub_state
+                elif sub_state is None:
+                    sub_state = {
+                        "main_answer": selected_index,
+                        "items": [],
+                        "complete": not can_have_subquestions,
+                    }
+                    subquestions[current_q] = sub_state
+                elif not can_have_subquestions:
+                    sub_state["items"] = []
+                    sub_state["complete"] = True
+
+                if can_have_subquestions and not sub_state.get("complete", False):
+                    items = sub_state.setdefault("items", [])
+                    for sub_idx, sub_data in enumerate(items):
+                        st.write(f"↳ **추가 질문 {sub_idx + 1}. {sub_data['question']}**")
+                        saved_answer = sub_data.get("answer")
+                        sub_selected = st.radio(
+                            "하위 선택지",
+                            range(len(sub_data["choices"])),
+                            format_func=lambda i, choices=sub_data["choices"]: choices[i],
+                            index=saved_answer if saved_answer is not None else None,
+                            key=f"sub_choice_{current_q}_{sub_idx}",
+                            label_visibility="collapsed",
+                        )
+                        if sub_selected is not None and sub_data.get("answer") != sub_selected:
+                            sub_data["answer"] = sub_selected
+                            subquestions[current_q] = sub_state
+                            st.rerun()
+
+                    all_sub_answered = all(item.get("answer") is not None for item in items)
+                    if all_sub_answered:
+                        if len(items) >= GEMINI_MAX_SUBQUESTIONS_PER_MAIN:
+                            sub_state["complete"] = True
+                        else:
+                            answers = _profile_answers_for_gemini(
+                                st.session_state["profile_responses"],
+                                gemini_questions,
+                                subquestions,
+                            )
+                            sub_answers = []
+                            for item in items:
+                                answer_idx = item.get("answer")
+                                sub_answers.append({
+                                    "question": item.get("question", ""),
+                                    "answer": item["choices"][answer_idx],
+                                })
+                            try:
+                                with st.spinner("추가 확인이 필요한지 확인 중입니다..."):
+                                    next_sub = _generate_gemini_profile_subquestion(
+                                        answers,
+                                        main_question_number,
+                                        q_data["question"],
+                                        q_choices[selected_index],
+                                        sub_answers,
+                                    )
+                                if next_sub.get("needs_sub_question"):
+                                    items.append({
+                                        "question": next_sub["question"],
+                                        "choices": next_sub["choices"],
+                                    })
+                                    subquestions[current_q] = sub_state
+                                    st.rerun()
+                                else:
+                                    sub_state["complete"] = True
+                            except Exception as exc:
+                                _activate_fixed_profile_fallback()
+                                st.warning(f"Gemini 하위 질문 생성에 실패해 기존 고정 질문으로 진행합니다. ({type(exc).__name__}: {exc})")
+                                st.rerun()
+
+                sub_complete = bool(sub_state.get("complete", False)) and all(
+                    item.get("answer") is not None for item in sub_state.get("items", [])
                 )
 
             cols = st.columns([2, 2, 1])
@@ -1993,38 +2468,185 @@ def run_streamlit_app():
             if nav_cols[0].button("이전", key="q_prev"):
                 if current_q in st.session_state["profile_responses"]:
                     del st.session_state["profile_responses"][current_q]
-                question_order = get_profile_question_order(st.session_state["profile_responses"])
-                try:
-                    current_idx = question_order.index(current_q)
-                    if current_idx > 0:
-                        st.session_state["current_question"] = question_order[current_idx - 1]
-                        st.rerun()
-                except ValueError:
-                    pass
+                st.session_state.setdefault("gemini_profile_subquestions", {}).pop(current_q, None)
+                if current_idx > 0:
+                    st.session_state["current_question"] = f"G{current_idx}"
+                    st.rerun()
             if nav_cols[1].button("처음으로", key="q_home"):
                 reset_app_to_start()
 
             with cols[2]:
-                if st.button("다음", key="q_next"):
-                    if is_multi:
-                        if not selected_indices:
-                            st.warning("최소 1개 이상 선택해 주세요.")
-                            st.stop()
-                        st.session_state["profile_responses"][current_q] = list(selected_indices)
-                    else:
-                        st.session_state["profile_responses"][current_q] = selected_indices
+                if st.button("다음", key="q_next", disabled=not sub_complete):
+                    st.session_state["profile_responses"][current_q] = selected_index
+                    responses = st.session_state["profile_responses"]
+                    answers = _profile_answers_for_gemini(
+                        responses,
+                        gemini_questions,
+                        st.session_state.get("gemini_profile_subquestions", {}),
+                    )
+                    answered_count = len(answers)
 
-                    next_q = get_next_question(current_q, st.session_state["profile_responses"])
+                    try:
+                        should_finish = answered_count >= GEMINI_MAX_PROFILE_QUESTIONS
+                        next_question = None
+                        if not should_finish and answered_count >= GEMINI_MIN_PROFILE_QUESTIONS:
+                            next_question = _generate_gemini_profile_question(answers, answered_count + 1)
+                            should_finish = next_question.get("is_complete", False)
+                        elif not should_finish:
+                            next_question = _generate_gemini_profile_question(answers, answered_count + 1)
 
-                    if next_q is None:
-                        profile_weights = calculate_profile_scores(st.session_state["profile_responses"])
-                        st.session_state["profile_weights"] = profile_weights
-                        st.session_state["profile_submitted"] = True
-                        st.session_state["app_step"] = 2
+                        if should_finish:
+                            profile_weights, funding = _generate_gemini_profile_result(answers)
+                            st.session_state["profile_weights"] = profile_weights
+                            st.session_state["profile_responses"]["Q8"] = _funding_situation_to_q8(funding)
+                            st.session_state["gemini_profile_result"] = {
+                                "answers": answers,
+                                "funding_situation": funding,
+                                "buy_mode": funding.get("buy_mode", ""),
+                            }
+                            st.session_state["profile_submitted"] = True
+                            st.session_state["selected_etfs"] = []
+                            st.session_state["app_step"] = 2
+                            st.rerun()
+
+                        gemini_questions.append(next_question)
+                        st.session_state["current_question"] = f"G{answered_count + 1}"
                         st.rerun()
-                    else:
-                        st.session_state["current_question"] = next_q
+                    except Exception as exc:
+                        _activate_fixed_profile_fallback()
+                        st.warning(f"Gemini 응답 처리에 실패해 기존 고정 질문으로 진행합니다. ({type(exc).__name__}: {exc})")
                         st.rerun()
+        else:
+            st.caption("Gemini를 사용할 수 없어 기존 고정 질문으로 진행합니다.")
+            current_q = st.session_state.get("current_question", "Q1")
+            
+            # 현재 질문 텍스트와 선택지 가져오기
+            q_text, q_choices = get_question_text_and_choices(current_q)
+            
+            if q_text is None:
+                # 모든 질문 완료
+                st.success("✅ 모든 질문을 완료했습니다!")
+                profile_weights = calculate_profile_scores(responses)
+                st.session_state["profile_weights"] = profile_weights
+                st.session_state["profile_submitted"] = True
+                
+                # 분석 결과 표시
+                st.write("### 투자 성향 분석 결과")
+                render_profile_metrics(profile_weights)
+                
+                if st.button("STEP2로 이동", key="proceed_to_step2"):
+                    st.session_state["app_step"] = 2
+                    st.rerun()
+            else:
+                q_data = AI_PROFILE_QUESTIONS[current_q]
+                is_multi = _is_multi_select_question(current_q)
+
+                # 질문 제목과 텍스트
+                st.write(q_text)
+                _render_profile_keyword_explanations([q_text, *q_choices], current_q)
+                
+                # 진행 상황
+                completed = len(responses)
+                total_questions = count_total_profile_questions(responses)
+                st.write(f"진행 상황: {completed}/{total_questions}")
+                
+                # 질문별 설명 또는 힌트
+                if current_q == "Q1":
+                    st.info("💡 이 질문은 당신의 가장 중요한 투자 목표를 파악합니다.")
+                elif current_q == "Q3":
+                    st.info("💡 현금이 들어오는 느낌과 자산이 커지는 느낌 중 어느 것이 더 좋은지 선택해 주세요.")
+                elif current_q == "Q4":
+                    st.warning("⚠️ 이 질문은 당신의 위험 감수 능력을 파악하는 중요한 질문입니다.")
+                elif current_q == "Q5":
+                    st.info("💡 Q4의 답변에 따라 나타나는 심화 질문입니다.")
+                elif current_q == "Q7":
+                    st.markdown(
+                        """
+                        <div style="background-color:#f0f7ff;padding:12px;border-left:4px solid #1f77b4;border-radius:4px;margin-bottom:16px;">
+                        <strong>💡 알아두세요:</strong> <strong>배당집중</strong>은 월배당처럼 정기적인 현금흐름을 받는 전략입니다. 
+                        <strong>레버리지 ETF</strong>는 2-3배 움직이는 고위험 상품입니다.
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                elif current_q == "Q7_SUB":
+                    st.markdown(
+                        """
+                        <div style="background-color:#fff3cd;padding:12px;border-left:4px solid #ff9800;border-radius:4px;margin-bottom:16px;">
+                        <strong>⚠️ 레버리지 ETF 이해도 측정:</strong> 아래 질문을 통해 당신의 이해도를 파악하고 적절한 비중을 추천합니다.
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    with st.expander("📖 레버리지 ETF 간단 설명 보기"):
+                        st.markdown(LEVERAGE_EXPLANATION)
+
+                if is_multi:
+                    max_select = q_data.get("max_select", PROFILE_MULTI_SELECT_MAX)
+                    st.caption(f"해당되는 항목을 **최소 1개, 최대 {max_select}개**까지 선택하세요.")
+                    saved = responses.get(current_q, [])
+                    if not isinstance(saved, list):
+                        saved = []
+                    selected_indices = st.multiselect(
+                        "선택 (복수)",
+                        options=list(range(len(q_choices))),
+                        default=saved,
+                        format_func=lambda i: q_choices[i],
+                        max_selections=max_select,
+                        key=f"choice_{current_q}",
+                        label_visibility="collapsed",
+                    )
+                else:
+                    selected_indices = st.radio(
+                        "선택지",
+                        range(len(q_choices)),
+                        format_func=lambda i: q_choices[i],
+                        index=responses.get(current_q, 0) if current_q in responses else 0,
+                        key=f"choice_{current_q}",
+                        label_visibility="collapsed",
+                    )
+
+                cols = st.columns([2, 2, 1])
+                nav_cols = cols[0].columns(2)
+                if nav_cols[0].button("이전", key="q_prev"):
+                    if current_q in st.session_state["profile_responses"]:
+                        del st.session_state["profile_responses"][current_q]
+                    question_order = get_profile_question_order(st.session_state["profile_responses"])
+                    try:
+                        current_idx = question_order.index(current_q)
+                        if current_idx > 0:
+                            st.session_state["current_question"] = question_order[current_idx - 1]
+                            st.rerun()
+                    except ValueError:
+                        pass
+                if nav_cols[1].button("처음으로", key="q_home"):
+                    reset_app_to_start()
+
+                with cols[2]:
+                    if st.button("다음", key="q_next"):
+                        if is_multi:
+                            if not selected_indices:
+                                st.warning("최소 1개 이상 선택해 주세요.")
+                                st.stop()
+                            st.session_state["profile_responses"][current_q] = list(selected_indices)
+                        else:
+                            st.session_state["profile_responses"][current_q] = selected_indices
+
+                        next_q = get_next_question(current_q, st.session_state["profile_responses"])
+
+                        if next_q is None:
+                            profile_weights = calculate_profile_scores(st.session_state["profile_responses"])
+                            st.session_state["profile_weights"] = profile_weights
+                            st.session_state["profile_submitted"] = True
+                            st.session_state["app_step"] = 2
+                            st.rerun()
+                        else:
+                            st.session_state["current_question"] = next_q
+                            st.rerun()
+
+        st.markdown("---")
+        if st.button("관리자모드", key="admin_mode_step1"):
+            activate_admin_mode()
 
     elif current_step == 2:
         if not profile_weights:
@@ -2046,11 +2668,11 @@ def run_streamlit_app():
         st.write("### 📊 당신의 투자 성향")
         render_profile_metrics(profile_weights)
 
-        if profile_weights.get("커버드콜", 0) >= 15:
+        if profile_weights.get("배당집중", 0) >= 15:
             st.info(
-                f"커버드콜 성향이 **{profile_weights.get('커버드콜', 0):.1f}%**입니다. "
+                f"배당집중 성향이 **{profile_weights.get('배당집중', 0):.1f}%**입니다. "
                 "월배당·프리미엄 수익을 노리는 ETF가 포함될 수 있습니다. "
-                "위 **「커버드콜이란?」** 안내를 참고해 주세요."
+                "위 **「배당집중이란?」** 안내를 참고해 주세요."
             )
 
         st.markdown("---")
@@ -2304,9 +2926,9 @@ def run_streamlit_app():
         description = ""
         if top_cat == "지수추적":
             description = "📈 시장 지수를 따라가며 안정적인 장기 수익을 추구하는 성향입니다."
-        elif top_cat == "배당형":
+        elif top_cat == "배당성장":
             description = "💰 정기적인 배당 수익을 통해 안정적인 현금흐름을 원하는 성향입니다."
-        elif top_cat == "커버드콜":
+        elif top_cat == "배당집중":
             description = "📅 월배당·프리미엄 수익을 통해 규칙적인 추가 수익을 기대하는 성향입니다."
         elif top_cat == "레버리지":
             description = "🚀 높은 수익을 추구하되 높은 변동성을 감수할 수 있는 공격적 성향입니다."
@@ -2372,7 +2994,9 @@ def run_streamlit_app():
         
         target_won = int(st.session_state.get("target_amount", 0))
         current_capital = float(st.session_state.get("current_capital", 0.0))
+        monthly_won = int(st.session_state.get("monthly_contribution", 0))
         selected_mode = st.session_state.get("analysis_mode")
+        dividend_report_months = int(float(st.session_state.get("years", st.session_state.get("target_years", 10))) * 12)
         
         goal_col1, goal_col2 = st.columns(2)
         with goal_col1:
@@ -2383,7 +3007,6 @@ def run_streamlit_app():
         st.write(f"**분석 모드:** {selected_mode}")
         
         if selected_mode == "목표 금액 달성":
-            monthly_won = int(st.session_state.get("monthly_contribution", 0))
             required_years = estimate_years_to_target(
                 target_won,
                 monthly_won,
@@ -2395,12 +3018,14 @@ def run_streamlit_app():
             
             if current_capital >= target_won:
                 st.success("✅ 현재 보유 자금만으로도 목표 달성 완료!")
+                dividend_report_months = 0
             elif monthly_won <= 0:
                 st.warning("⚠️ 월 적립금이 0입니다. 목표 달성에 필요한 월 적립금을 설정해 주세요.")
             elif not np.isfinite(required_years) or required_years == float("inf"):
                 st.warning("⚠️ 현재 설정으로는 목표 달성이 어렵습니다.")
             else:
                 total_months = int(round(required_years * 12))
+                dividend_report_months = total_months
                 years_calc = total_months // 12
                 months_remain = total_months % 12
                 st.write(f"• **예상 달성 기간:** {years_calc}년 {months_remain}개월")
@@ -2413,6 +3038,7 @@ def run_streamlit_app():
             st.write(f"• **투자 기간:** {format_period_label(start_date, end_date)}")
             
             months = int(target_years_val * 12)
+            dividend_report_months = months
             monthly_r = portfolio_avg_return / 12
             future_current_capital = current_capital * np.power(1 + monthly_r, months)
             
@@ -2433,97 +3059,118 @@ def run_streamlit_app():
 
         st.markdown("---")
 
-        # ===== 섹션 4: 종합 투자 전략 =====
-        st.markdown("### 💡 4. 종합 투자 전략 권고")
-        
-        q8_answer = st.session_state.get("profile_responses", {}).get("Q8")
-        if q8_answer == 0:
-            buy_rec = "혼합식 (거치식 + 적립식)"
-            buy_reason = "초기 목돈을 먼저 투자하고, 매달 정해진 금액을 추가로 적립하는 방식입니다. 초기 투자로 수익의 기초를 다지고, 정기적인 적립으로 평균 단가를 낮춰 장기 수익성을 높일 수 있습니다."
-        elif q8_answer == 1:
-            buy_rec = "거치식 (한 번에 투자)"
-            buy_reason = "현재 보유한 목돈을 한 번에 투자하고 장기 보유하는 방식입니다. 정기적인 적립 여력이 없으신 경우, 초기 투자 금액을 잘 분배하고 꾸준히 유지하는 것이 중요합니다."
-        elif q8_answer == 2:
-            buy_rec = "적립식 (정기적 매수)"
-            buy_reason = "매달 정해진 금액을 꾸준히 투자하는 방식입니다. 큰 목돈이 없어도 투자 습관을 만들 수 있으며, 시장 변동성에 덜 영향을 받을 수 있습니다."
+        # ===== 투자기간 후 월 배당금 카드 =====
+        st.markdown("### 💵 투자기간 후 월 배당금 예상")
+
+        MONTHLY_DIVIDEND_ETFS = {"JEPI", "JEPQ", "QYLD"}
+        dividend_yields = {
+            ticker: dividend_yield
+            for ticker in selected_etfs
+            if (dividend_yield := _get_etf_dividend_yield(ticker)) is not None and dividend_yield >= 0.01
+        }
+
+        if not dividend_yields:
+            st.info("배당수익률 1% 이상 ETF가 없어 월 배당금 예상치를 표시하지 않습니다.")
         else:
-            buy_rec = "혼합식 (거치식 + 적립식)"
-            buy_reason = "초기 목돈과 월 적립 여력에 맞춰 유연하게 조정하는 방식입니다. 투자 상황에 따라 거치식과 적립식의 비중을 조절할 수 있습니다."
-        
-        st.write(f"**🎯 권장 매수 방식:** {buy_rec}")
-        st.write(f"**📌 이유:**")
-        st.write(buy_reason)
+            total_months = max(0, int(dividend_report_months))
+            monthly_r = portfolio_avg_return / 12
+            buy_mode = _recommended_investment_mode_from_profile()
+            base_value = 0.0 if buy_mode == "적립형" else current_capital
+            monthly_add = monthly_won if buy_mode in {"적립형", "혼합형"} else 0
+
+            projected_value = base_value
+            cumulative_dividend = 0
+            final_monthly_total = 0
+            final_dividend_asset_value = 0
+            for month in range(total_months + 1):
+                monthly_total = 0
+                dividend_asset_value = 0
+                for ticker, dividend_yield in dividend_yields.items():
+                    etf_asset_won = projected_value * portfolio_weights.get(ticker, 0)
+                    dividend_asset_value += etf_asset_won
+                    annual_dividend_won = etf_asset_won * dividend_yield
+                    if ticker in MONTHLY_DIVIDEND_ETFS:
+                        monthly_dividend_won = annual_dividend_won / 12
+                    else:
+                        monthly_dividend_won = (annual_dividend_won / 4) / 3
+                    monthly_total += monthly_dividend_won
+                final_monthly_total = monthly_total
+                final_dividend_asset_value = dividend_asset_value
+                if month < total_months:
+                    cumulative_dividend += monthly_total
+                    projected_value *= (1 + monthly_r)
+                    projected_value += monthly_add
+
+            dividend_weight_sum = sum(portfolio_weights.get(ticker, 0) for ticker in dividend_yields)
+            dividend_invested_amount = (base_value + monthly_add * total_months) * dividend_weight_sum
+            dividend_return_pct = (
+                ((final_dividend_asset_value + cumulative_dividend) / dividend_invested_amount - 1) * 100
+                if dividend_invested_amount > 0
+                else 0
+            )
+            report_years = total_months // 12
+            report_months = total_months % 12
+            period_label = f"{report_years}년 후" if report_months == 0 else f"{report_years}년 {report_months}개월 후"
+            monthly_dividend_won = int(round(final_monthly_total))
+            final_dividend_asset_won = int(round(final_dividend_asset_value))
+            cumulative_dividend_won = int(round(cumulative_dividend))
+
+            st.markdown(
+                f"""
+                <div style="
+                    background:linear-gradient(135deg,#2f9f63 0%,#4aa36b 52%,#2f7d6d 100%);
+                    border-radius:0;
+                    padding:26px 28px 24px 28px;
+                    color:white;
+                    box-shadow:0 8px 20px rgba(0,0,0,0.12);
+                ">
+                    <div style="font-size:1.05rem;font-weight:700;margin-bottom:8px;opacity:0.95;">💸 {period_label} 매달 받는 배당금</div>
+                    <div style="font-size:3.2rem;font-weight:900;line-height:1.05;letter-spacing:-1px;">{monthly_dividend_won:,}원</div>
+                    <div style="font-size:0.9rem;margin-top:8px;opacity:0.78;">배당금은 세전 기준입니다.</div>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:26px;">
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💼 배당 ETF 총 자산 {final_dividend_asset_won:,}원</div>
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">↗ 배당 ETF 수익률 {dividend_return_pct:,.1f}%</div>
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💸 총 배당 {cumulative_dividend_won:,}원</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
-        # ===== 섹션 5: 주의사항 =====
-        st.markdown("### ⚠️ 5. 주의사항 및 리스크 관리")
-        
-        cautions = []
-        
-        if leverage_count > 0:
-            cautions.append({
-                "title": "🚀 레버리지 ETF 관리",
-                "content": "포트폴리오에 레버리지 ETF가 포함되어 있습니다. 이들은 일반 지수 대비 2-3배 움직이므로:\n"
-                "• 변동성이 매우 크니 충분한 자금 여력을 확보하세요.\n"
-                "• 한 번에 모두 투자하기보다 3~6회 나누어 매수하세요.\n"
-                "• 레버리지 ETF 비중을 포트폴리오의 30% 이내로 제한하세요.\n"
-                "• 장기 보유 시 일일 정산으로 인한 손실 가능성을 인지하세요."
-            })
-        
-        if dividend_count > 0:
-            cautions.append({
-                "title": "💰 배당금 활용 전략",
-                "content": "배당 ETF에서 받은 배당금은:\n"
-                "• 재투자하여 복리 효과를 극대화하거나\n"
-                "• 리밸런싱 시에 활용할 수 있습니다."
-            })
-        
-        if top_cat == "커버드콜":
-            cautions.append({
-                "title": "📅 커버드콜 ETF 특성",
-                "content": "월배당 수익이 매력적이지만:\n"
-                "• 급등 구간에서는 상승 이익의 일부를 놓칠 수 있습니다.\n"
-                "• 하락 위험으로부터 완전히 보호되지는 않습니다.\n"
-                "• 배당 수익이 매월 일정하지 않을 수 있습니다."
-            })
-        
-        cautions.append({
-            "title": "🔄 정기적 리밸런싱",
-            "content": "연 1~2회 포트폴리오를 재조정하여:\n"
-            "• 목표 비중을 유지하고\n"
-            "• 변동성을 관리하며\n"
-            "• 장기 성과를 개선하세요."
-        })
-        
-        cautions.append({
-            "title": "📈 시장 변동성 대응",
-            "content": "시장이 하락할 때:\n"
-            "• 포트폴리오 구성의 타당성을 재검토하세요.\n"
-            "• 계획한 매수를 계속 진행하세요 (평균 단가 인하).\n"
-            "• 급한 매도는 피하세요."
-        })
-        
-        for idx, caution in enumerate(cautions, 1):
-            with st.expander(f"{caution['title']}"):
-                st.write(caution['content'])
+        # ===== 섹션 4: AI 성향 분석 결과 =====
+        st.markdown("### 💡 4. AI 성향 분석 결과")
 
-        st.markdown("---")
-
-        # ===== 섹션 6: 실행 체크리스트 =====
-        st.markdown("### ✅ 6. 투자 시작 전 체크리스트")
-        
-        checklist_items = [
-            "현재 보유 자금과 월 적립 가능액이 정확한가?",
-            "선택한 ETF들의 특성을 이해했는가?",
-            "투자 기간과 목표 금액이 현실적인가?",
-            "비상금(생활비 3~6개월)을 별도로 확보했는가?",
-            "포트폴리오 구성의 리스크를 수용할 수 있는가?",
-            "정기적으로 리밸런싱할 계획이 있는가?"
+        investment_method = _recommended_investment_mode_from_profile().replace("형", "식")
+        analysis_years = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+        selected_etfs_for_prompt = [
+            {
+                "ETF": ticker,
+                "비중": f"{portfolio_weights.get(ticker, 0) * 100:.1f}%",
+            }
+            for ticker in selected_etfs
         ]
-        
-        for item in checklist_items:
-            st.write(f"• {item}")
+
+        try:
+            with st.spinner("AI 분석 중입니다. 잠시만 기다려 주세요..."):
+                ai_analysis = _generate_gemini_step4_analysis(
+                    profile_weights,
+                    selected_etfs_for_prompt,
+                    investment_method,
+                    target_won,
+                    analysis_years,
+                )
+        except Exception:
+            ai_analysis = _default_step4_analysis_text(
+                profile_weights,
+                selected_etfs,
+                investment_method,
+                target_won,
+                analysis_years,
+            )
+
+        st.info(ai_analysis)
 
         st.markdown("---")
 
@@ -2537,7 +3184,7 @@ def run_streamlit_app():
             return
 
         st.markdown("### 💼 투자 목표 설정 및 분석")
-        st.markdown("**목표 금액, 현재 자금, 월 적립금, 투자 기간을 모두 입력하고 원하는 분석 모드를 선택하세요.**")
+        st.markdown("**분석 모드를 먼저 선택한 뒤 필요한 투자 정보를 입력하세요.**")
         st.markdown("---")
 
         def fmt_money(n):
@@ -2560,32 +3207,122 @@ def run_streamlit_app():
             for ticker in step3_portfolio_weights
         ) or 0.06
 
-        # ===== 입력 섹션 (모두 한 번에 표시) =====
-        st.markdown("#### 📊 1단계: 투자 정보 입력")
-        
-        # 금액 입력
-        col1, col2 = st.columns(2)
-        with col1:
-            target_won = render_manwon_amount_input(
-                "목표 금액",
-                "unified_target_amount_manwon",
-                int(st.session_state.get("target_amount", 500000000)),
+        # ===== 분석 모드 선택 =====
+        st.markdown("#### 🎯 1단계: 분석 모드 선택")
+
+        st.markdown(
+            """
+            <style>
+            .analysis-mode-card {
+                border: 1.5px solid #d9e2ec;
+                border-radius: 18px;
+                padding: 22px 20px;
+                min-height: 168px;
+                background: #ffffff;
+                box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+                transition: all 0.2s ease;
+            }
+            .analysis-mode-card.selected {
+                border-color: #4f8cff;
+                background: linear-gradient(135deg, #eef5ff 0%, #ffffff 100%);
+                box-shadow: 0 10px 26px rgba(79, 140, 255, 0.18);
+            }
+            .analysis-mode-title {
+                font-size: 1.15rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+                color: #172033;
+            }
+            .analysis-mode-question {
+                font-size: 0.98rem;
+                font-weight: 700;
+                color: #315174;
+                margin-bottom: 10px;
+            }
+            .analysis-mode-desc {
+                font-size: 0.9rem;
+                color: #526173;
+                line-height: 1.55;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.caption("어떤 방식으로 목표를 확인하고 싶은지 선택해 주세요.")
+
+        selected_analysis_mode = st.session_state.get("analysis_mode")
+        mode_col1, mode_col2 = st.columns(2)
+
+        with mode_col1:
+            selected_class = " selected" if selected_analysis_mode == "목표 금액 달성" else ""
+            st.markdown(
+                f"""
+                <div class="analysis-mode-card{selected_class}">
+                    <div class="analysis-mode-title">🏁 목표 금액 달성</div>
+                    <div class="analysis-mode-question">“원하는 금액을 만들려면?”</div>
+                    <div class="analysis-mode-desc">
+                        목표 금액까지 가려면 현재 자금과 월 적립금으로 얼마나 걸릴지 확인합니다.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-        with col2:
+            if st.button("목표 금액 달성 선택", use_container_width=True, key="select_target_amount_mode"):
+                selected_analysis_mode = "목표 금액 달성"
+
+        with mode_col2:
+            selected_class = " selected" if selected_analysis_mode == "목표 기간 확인" else ""
+            st.markdown(
+                f"""
+                <div class="analysis-mode-card{selected_class}">
+                    <div class="analysis-mode-title">📅 목표 기간 확인</div>
+                    <div class="analysis-mode-question">“이 기간 동안 가능할까?”</div>
+                    <div class="analysis-mode-desc">
+                        정해진 투자 기간 동안 목표 금액에 가까워질 수 있는지 확인합니다.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("목표 기간 확인 선택", use_container_width=True, key="select_target_period_mode"):
+                selected_analysis_mode = "목표 기간 확인"
+
+        st.session_state["analysis_mode"] = selected_analysis_mode
+
+        if selected_analysis_mode is None:
+            st.info("분석 모드를 선택하면 입력창이 표시됩니다.")
+            st.markdown("---")
+            step_button_row()
+            return
+
+        st.markdown("---")
+
+        # ===== 입력 섹션 (선택한 모드에 따라 표시) =====
+        st.markdown("#### 📊 2단계: 투자 정보 입력")
+
+        if selected_analysis_mode == "목표 금액 달성":
+            col1, col2 = st.columns(2)
+            with col1:
+                target_won = render_manwon_amount_input(
+                    "목표 금액",
+                    "unified_target_amount_manwon",
+                    int(st.session_state.get("target_amount", 500000000)),
+                )
+            with col2:
+                monthly_won = render_manwon_amount_input(
+                    "월 적립금",
+                    "unified_monthly_contribution_manwon",
+                    int(st.session_state.get("monthly_contribution", 100000)),
+                )
+
             current_capital = render_manwon_amount_input(
                 "현재 보유 자금",
                 "unified_current_capital_manwon",
                 int(st.session_state.get("current_capital", 0)),
             )
 
-        col3, col4 = st.columns(2)
-        with col3:
-            monthly_won = render_manwon_amount_input(
-                "월 적립금",
-                "unified_monthly_contribution_manwon",
-                int(st.session_state.get("monthly_contribution", 100000)),
-            )
-        with col4:
+        elif selected_analysis_mode == "목표 기간 확인":
             st.markdown("#### ⏰ 투자 기간")
             target_years_val = render_investment_period_selector(
                 key_prefix="unified_sim_period",
@@ -2593,18 +3330,19 @@ def run_streamlit_app():
                 period_label="투자 기간",
             )
 
-        st.markdown("---")
-        
-        # ===== 분석 모드 선택 =====
-        st.markdown("#### 🎯 2단계: 분석 모드 선택")
-        
-        selected_analysis_mode = st.radio(
-            "어떤 분석을 하고 싶으신가요?",
-            ANALYSIS_MODES,
-            horizontal=True,
-            key="analysis_mode_select",
-        )
-        st.session_state["analysis_mode"] = selected_analysis_mode
+            col1, col2 = st.columns(2)
+            with col1:
+                monthly_won = render_manwon_amount_input(
+                    "월 적립금",
+                    "unified_monthly_contribution_manwon",
+                    int(st.session_state.get("monthly_contribution", 100000)),
+                )
+            with col2:
+                current_capital = render_manwon_amount_input(
+                    "현재 보유 자금",
+                    "unified_current_capital_manwon",
+                    int(st.session_state.get("current_capital", 0)),
+                )
         
         st.markdown("---")
         
@@ -2612,15 +3350,22 @@ def run_streamlit_app():
         st.markdown("#### 📈 3단계: 분석 결과")
         
         # 기본 정보 표시
-        info_cols = st.columns(4)
-        with info_cols[0]:
-            st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
-        with info_cols[1]:
-            st.metric("목표 금액", f"{fmt_money(target_won)}원")
-        with info_cols[2]:
-            st.metric("월 적립금", f"{fmt_money(monthly_won)}원")
-        with info_cols[3]:
-            st.metric("투자 기간", f"{target_years_val:.1f}년")
+        if selected_analysis_mode == "목표 금액 달성":
+            info_cols = st.columns(3)
+            with info_cols[0]:
+                st.metric("목표 금액", f"{fmt_money(target_won)}원")
+            with info_cols[1]:
+                st.metric("월 적립금", f"{fmt_money(monthly_won)}원")
+            with info_cols[2]:
+                st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
+        elif selected_analysis_mode == "목표 기간 확인":
+            info_cols = st.columns(3)
+            with info_cols[0]:
+                st.metric("투자 기간", f"{target_years_val:.1f}년")
+            with info_cols[1]:
+                st.metric("월 적립금", f"{fmt_money(monthly_won)}원")
+            with info_cols[2]:
+                st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
 
         st.markdown("")
         
@@ -2672,16 +3417,9 @@ def run_streamlit_app():
         
         elif selected_analysis_mode == "목표 기간 확인":
             st.markdown("**📍 분석 모드: 목표 기간 확인**")
-            st.write("투자 기간을 고정하고, 목표 금액 달성에 필요한 월 적립금을 계산합니다.")
+            st.write("투자 기간을 고정하고, 해당 기간 후 달성 가능한 금액을 계산합니다.")
             
-            required_monthly = estimate_required_contribution(
-                target_won,
-                target_years_val,
-                current_capital,
-                avg_return=step3_avg_return,
-            )
-            
-            st.session_state["target_amount"] = target_won
+            st.session_state["monthly_contribution"] = monthly_won
             st.session_state["current_capital"] = current_capital
             st.session_state["target_years"] = target_years_val
             st.session_state["years"] = target_years_val
@@ -2689,33 +3427,29 @@ def run_streamlit_app():
             months = int(target_years_val * 12)
             monthly_r = step3_avg_return / 12
             future_current_capital = current_capital * np.power(1 + monthly_r, months)
+            future_monthly_contribution = monthly_won * (
+                (np.power(1 + monthly_r, months) - 1) / monthly_r
+                if monthly_r != 0
+                else months
+            )
+            achievable_amount = int(future_current_capital + future_monthly_contribution)
             
-            if future_current_capital >= target_won:
-                st.success("✅ 현재 보유 자금만으로도 목표 달성 가능!")
-            else:
-                if not np.isfinite(required_monthly):
-                    required_monthly_int = 0
-                else:
-                    required_monthly_int = int(np.ceil(required_monthly))
-                
-                st.session_state["monthly_contribution"] = required_monthly_int
-                
-                st.markdown(
-                    f"""
-                    <div style="
-                        background:linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-                        border-radius:12px;
-                        padding:24px;
-                        text-align:center;
-                        color:white;
-                    ">
-                        <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">💳 필요 월 적립금</div>
-                        <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{fmt_money(required_monthly_int)}원</div>
-                        <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f"""
+                <div style="
+                    background:linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                    border-radius:12px;
+                    padding:24px;
+                    text-align:center;
+                    color:white;
+                ">
+                    <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">💰 예상 달성 금액</div>
+                    <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{fmt_money(achievable_amount)}원</div>
+                    <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
@@ -2744,21 +3478,6 @@ def run_streamlit_app():
             end_date = st.session_state["unified_sim_period_end"]
         else:
             end_date = add_calendar_years(start_date, max(1, int(np.ceil(years_sim))))
-        if st.session_state.get("analysis_mode") == "목표 기간 확인":
-            target_won = int(st.session_state.get("target_amount", 500000000))
-            portfolio_avg_return = sum(
-                port_weights.get(ticker, 0) * ETF_DATA[ticker].get("cagr", 0.10)
-                for ticker in port_weights
-            ) or 0.06
-            required_monthly = estimate_required_contribution(
-                target_won,
-                years_sim,
-                current_capital,
-                avg_return=portfolio_avg_return,
-            )
-            monthly_won = 0 if not np.isfinite(required_monthly) else int(np.ceil(required_monthly))
-            st.session_state["monthly_contribution"] = monthly_won
-
         st.write("### 결과 시각화")
         try:
             with st.spinner("시뮬레이션 계산 중..."):
@@ -2770,7 +3489,26 @@ def run_streamlit_app():
                     monthly_won,
                     recommended_mode,
                 )
+            render_start = time.perf_counter()
             st.plotly_chart(fig, use_container_width=True)
+            # region agent log
+            _agent_debug_log(
+                "pre-fix",
+                "H5",
+                "app.py:run_streamlit_app:plotly_chart",
+                "Plotly chart rendered",
+                {"duration_ms": round((time.perf_counter() - render_start) * 1000, 2)},
+            )
+            # endregion
+            st.info(
+                "📌 급락 구간 기준:\n"
+                "내 포트폴리오 중앙값이 전월 대비 15% 이상 \n"
+                "하락한 구간을 급락 구간으로 표시합니다.\n\n"
+                "💡 급락 구간은 추가 매수 기회입니다.\n"
+                "여유 현금이 있다면 해당 시점에 추가 투자를 \n"
+                "고려해보세요. 장기적으로 저점 매수 효과를 \n"
+                "기대할 수 있습니다."
+            )
         except RuntimeError as exc:
             st.error(str(exc))
         cols = st.columns([2, 2, 1])
