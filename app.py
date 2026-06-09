@@ -9,6 +9,7 @@ import numpy as np
 import anthropic
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from dotenv import load_dotenv
 try:
@@ -157,17 +158,6 @@ LEVERAGE_EXPLANATION = """
 - 🟡 **도전 가능:** 작은 비중만 레버리지 시도 (전체의 10-20%)
 - 🔴 **피할 것:** 장기 보유 또는 전체 자산 투자
 """
-
-PROFILE_METRIC_HELP = {
-    "배당집중": (
-        "보유 자산에 콜옵션을 매도해 프리미엄(월배당 등)을 받는 전략. "
-        "급등 시 수익은 제한될 수 있습니다."
-    ),
-    "레버리지": (
-        "2배 또는 3배 레버리지를 사용하는 상품. 수익이 크지만 손실도 크고 "
-        "일일변동성 영향이 있으므로 주의가 필요합니다."
-    ),
-}
 
 # 복수 선택 문항: 카테고리당 점수 상한 (무제한 선택 시 성향이 평탄해지는 것 방지)
 PROFILE_MULTI_SELECT_MAX = 2
@@ -744,20 +734,20 @@ def _activate_fixed_profile_fallback():
     st.session_state["profile_keyword_explanation_contexts"] = {}
 
 
-def render_profile_metrics(profile_weights):
-    """투자 성향 비율과 배당집중 설명을 표시합니다."""
+def render_profile_metrics(profile_weights, show_guides=True):
+    """투자 성향 비율을 표시하고, 필요 시 배당집중·레버리지 안내를 함께 표시합니다."""
     cols = st.columns(len(AI_PROFILE_CATEGORIES))
     for i, cat in enumerate(AI_PROFILE_CATEGORIES):
         with cols[i]:
             st.metric(
                 cat,
                 f"{profile_weights.get(cat, 0)}%",
-                help=PROFILE_METRIC_HELP.get(cat),
             )
-    with st.expander("💡 배당집중이란? (처음이시라면 읽어보세요)"):
-        st.markdown(COVERED_CALL_EXPLANATION)
-    with st.expander("💡 레버리지 ETF란? (처음이시라면 읽어보세요)"):
-        st.markdown(LEVERAGE_EXPLANATION)
+    if show_guides:
+        with st.expander("💡 배당집중이란? (처음이시라면 읽어보세요)"):
+            st.markdown(COVERED_CALL_EXPLANATION)
+        with st.expander("💡 레버리지 ETF란? (처음이시라면 읽어보세요)"):
+            st.markdown(LEVERAGE_EXPLANATION)
 
 # ============================================================
 # 섹션 3. ETF 추천 함수
@@ -1199,17 +1189,181 @@ def get_same_category_replacement_options(ticker, selected_etfs):
     return [ticker] + alternatives
 
 
-def _format_replace_option_label(option_ticker, current_ticker):
-    """종목 교체 라디오 한 줄(멀티라인) 라벨."""
-    info = ETF_DATA.get(option_ticker, {})
-    current_tag = " (현재 보유)" if option_ticker == current_ticker else ""
-    summary = ETF_SUMMARY_DESCRIPTIONS.get(option_ticker, info.get("이름", ""))
-    return (
-        f"{option_ticker}{current_tag}\n"
-        f"{summary}\n"
-        f"보수율 {info.get('보수율', 0) * 100:.2f}%"
-        f"  ·  배당 {'있음' if info.get('배당') else '없음'}"
+def _render_etf_replace_option_detail(ticker):
+    """종목 교체 카드 안에서 보여줄 ETF 상세 정보."""
+    info = ETF_DATA.get(ticker, {})
+    detail = ETF_DETAIL_GUIDE.get(ticker, {})
+    category_label = CATEGORY_DISPLAY_LABELS.get(info.get("카테고리", ""), info.get("카테고리", ""))
+
+    st.markdown(f"**{info.get('이름', ticker)}**")
+    st.caption(category_label)
+
+    summary = ETF_SUMMARY_DESCRIPTIONS.get(ticker, "")
+    if summary:
+        st.write(summary)
+
+    st.write(f"**보수율:** {info.get('보수율', 0) * 100:.2f}%")
+    st.write(f"**배당:** {'있음' if info.get('배당') else '없음'}")
+    st.write(f"**레버리지:** {'있음 (위험)' if info.get('레버리지') else '없음'}")
+
+    if detail.get("intro"):
+        st.write(detail["intro"])
+
+    recommended_for = detail.get("recommended_for", [])
+    if recommended_for:
+        st.write("**이런 분께 추천:**")
+        for item in recommended_for:
+            st.write(f"→ {item}")
+
+    caution = detail.get("caution")
+    if caution:
+        st.write("**주의사항:**")
+        st.write(f"→ {caution}")
+
+
+def _replace_option_card_html(option_ticker, category_label, is_current=False):
+    border = "#2563eb" if is_current else "#d9e2ec"
+    background = (
+        "linear-gradient(135deg, #eef5ff 0%, #ffffff 100%)"
+        if is_current
+        else "#ffffff"
     )
+    current_tag = (
+        '<span style="margin-left:8px;font-size:0.78rem;font-weight:700;color:#1d4ed8;">'
+        "현재 보유</span>"
+        if is_current
+        else ""
+    )
+    return (
+        f'<div style="border:2px solid {border};background:{background};border-radius:12px;'
+        f'padding:14px 12px 8px;min-height:58px;">'
+        f'<div style="font-size:1.15rem;font-weight:800;color:#172033;line-height:1.3;">'
+        f"{option_ticker}{current_tag}</div>"
+        f'<div style="font-size:0.82rem;color:#64748b;margin-top:6px;">{category_label}</div>'
+        f"</div>"
+    )
+
+
+def _build_etf_replace_comparison_df(replace_options, current_ticker):
+    """교체 후보 ETF 비교용 데이터프레임을 만듭니다."""
+    rows = []
+    for option_ticker in replace_options:
+        info = ETF_DATA.get(option_ticker, {})
+        live_snapshot = _get_live_etf_snapshot(option_ticker)
+        annual_return = live_snapshot.get("annual_return_pct")
+        if annual_return is None:
+            annual_return = _get_etf_annual_return(option_ticker)
+
+        dividend_yield = live_snapshot.get("dividend_yield_pct")
+        if dividend_yield is None and info.get("배당"):
+            dividend_yield = 2.0
+
+        risk_stars = _get_risk_stars(option_ticker)
+        is_current = option_ticker == current_ticker
+        rows.append({
+            "종목": f"{option_ticker} · 현재" if is_current else option_ticker,
+            "예상 수익률": f"{annual_return:.1f}%",
+            "위험도": f"{'★' * risk_stars}{'☆' * (5 - risk_stars)}",
+            "배당수익률": f"{dividend_yield:.1f}%" if dividend_yield is not None else "-",
+            "보수율": f"{info.get('보수율', 0) * 100:.2f}%",
+            "_is_current": is_current,
+        })
+    return pd.DataFrame(rows)
+
+
+def _render_etf_replace_comparison_table(replace_options, current_ticker):
+    """카드 아래에 항상 보이는 교체 후보 비교표를 표시합니다."""
+    if len(replace_options) <= 1:
+        return
+
+    comparison_df = _build_etf_replace_comparison_df(replace_options, current_ticker)
+    display_cols = ["종목", "예상 수익률", "위험도", "배당수익률", "보수율"]
+
+    def _highlight_current_row(row):
+        is_current = bool(comparison_df.loc[row.name, "_is_current"])
+        style = "background-color: #eef5ff; font-weight: 600"
+        return [style if is_current else "" for _ in row]
+
+    st.caption("같은 카테고리 ETF 한눈에 비교")
+    styled_df = (
+        comparison_df[display_cols]
+        .style.apply(_highlight_current_row, axis=1)
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [("font-size", "0.85rem"), ("text-align", "center")],
+                },
+                {
+                    "selector": "td",
+                    "props": [("font-size", "0.85rem"), ("text-align", "center")],
+                },
+            ]
+        )
+    )
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+
+def _render_horizontal_replace_selector(slot_idx, current_ticker, replace_options, radio_key):
+    """같은 카테고리 교체 후보를 가로 카드로 표시하고, 카드 클릭 시 즉시 교체합니다."""
+    st.markdown(
+        """
+        <style>
+        div.replace-ticker-btn + div[data-testid="stVerticalBlock"] button {
+            font-size: 1.15rem !important;
+            font-weight: 800 !important;
+            color: #172033 !important;
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            text-align: left !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+        }
+        div.replace-ticker-btn + div[data-testid="stVerticalBlock"] button:hover {
+            color: #2563eb !important;
+            background: transparent !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    option_cols = st.columns(len(replace_options))
+
+    for i, option_ticker in enumerate(replace_options):
+        info = ETF_DATA.get(option_ticker, {})
+        is_current = option_ticker == current_ticker
+        category_label = CATEGORY_DISPLAY_LABELS.get(info.get("카테고리", ""), info.get("카테고리", ""))
+
+        with option_cols[i]:
+            if is_current:
+                st.markdown(
+                    _replace_option_card_html(option_ticker, category_label, is_current=True),
+                    unsafe_allow_html=True,
+                )
+            else:
+                with st.container(border=True):
+                    st.markdown('<div class="replace-ticker-btn"></div>', unsafe_allow_html=True)
+                    if st.button(
+                        option_ticker,
+                        key=f"replace_pick_{slot_idx}_{i}",
+                        use_container_width=True,
+                        help=f"{option_ticker}로 교체합니다.",
+                    ):
+                        st.session_state[radio_key] = i
+                        _apply_etf_replace(slot_idx, current_ticker, replace_options)
+                        st.rerun()
+                    st.caption(category_label)
+
+            if hasattr(st, "popover"):
+                with st.popover("상세 보기", use_container_width=True):
+                    _render_etf_replace_option_detail(option_ticker)
+            else:
+                with st.expander("상세 보기", expanded=False):
+                    _render_etf_replace_option_detail(option_ticker)
+
+    _render_etf_replace_comparison_table(replace_options, current_ticker)
+    return current_ticker
 
 
 def _replace_radio_key(slot_idx):
@@ -1258,7 +1412,6 @@ def _apply_etf_replace(slot_idx, old_ticker, replace_options):
         st.session_state["etf_weights"] = etf_weights
 
     st.session_state.pop(f"replace_error_{slot_idx}", None)
-    st.session_state[f"replace_msg_{slot_idx}"] = f"{old_ticker} → {new_ticker}로 교체됨"
 
 
 # ============================================================
@@ -2089,6 +2242,55 @@ def generate_growth_path(initial_capital, monthly_contribution, years, avg_retur
     return values
 
 
+def _request_scroll_to_top():
+    st.session_state["_scroll_to_top"] = True
+
+
+def _render_scroll_to_top():
+    if not st.session_state.pop("_scroll_to_top", False):
+        return
+    components.html(
+        """
+        <script>
+            (function () {
+                function scrollToTop() {
+                    const parent = window.parent;
+                    const doc = parent.document;
+                    const selectors = [
+                        'section[data-testid="stMain"]',
+                        'section.main',
+                        '[data-testid="stAppViewContainer"]',
+                        '.main',
+                    ];
+                    selectors.forEach(function (selector) {
+                        const el = doc.querySelector(selector);
+                        if (el) {
+                            el.scrollTop = 0;
+                            if (el.scrollTo) {
+                                el.scrollTo({ top: 0, left: 0, behavior: "auto" });
+                            }
+                        }
+                    });
+                    parent.scrollTo(0, 0);
+                }
+                scrollToTop();
+                setTimeout(scrollToTop, 50);
+                setTimeout(scrollToTop, 200);
+            })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def _set_app_step(new_step, *, scroll_to_top=True):
+    if scroll_to_top and new_step != st.session_state.get("app_step"):
+        _request_scroll_to_top()
+    st.session_state["app_step"] = new_step
+    st.rerun()
+
+
 def run_streamlit_app():
     st.set_page_config(page_title="ETF 포트폴리오 시뮬레이션", layout="wide")
     st.title("ETF 포트폴리오 시뮬레이션")
@@ -2157,24 +2359,11 @@ def run_streamlit_app():
             st.session_state[key] = fmt_money(int(default_won) // 10000)
 
     def render_manwon_amount_input(title, key, default_won):
-        """직접 입력 + 프리셋 버튼 방식의 금액 입력"""
+        """프리셋 버튼 + 카드 UI 내 직접 입력 방식의 금액 입력"""
         init_man_amount_key(key, default_won)
-        
+
         st.markdown(f"#### 💰 {title}")
-        
-        # 입력창 + 프리셋 버튼 한 줄로
-        input_cols = st.columns([2, 1, 1, 1, 1, 1])
-        
-        with input_cols[0]:
-            st.text_input(
-                "금액 입력",
-                key=key,
-                on_change=format_money_input,
-                args=(key,),
-                label_visibility="collapsed",
-                placeholder="예: 5000 (= 5,000만원)",
-            )
-        
+
         preset_amounts = [
             ("100만", 100),
             ("500만", 500),
@@ -2182,15 +2371,13 @@ def run_streamlit_app():
             ("5000만", 5000),
             ("1억", 10000),
         ]
-        
-        # 콜백 함수: 프리셋 값을 세션 상태에 저장
+
         def set_preset_value(manwon_val):
             st.session_state[key] = fmt_money(manwon_val)
-        
-        # 프리셋 버튼 처리
+
+        preset_cols = st.columns(len(preset_amounts))
         for idx, (label, manwon_val) in enumerate(preset_amounts):
-            col = input_cols[idx + 1]
-            with col:
+            with preset_cols[idx]:
                 st.button(
                     label,
                     key=f"{key}_btn_{idx}",
@@ -2198,41 +2385,53 @@ def run_streamlit_app():
                     on_click=set_preset_value,
                     args=(manwon_val,),
                 )
-        
-        # 입력값 표시
-        try:
-            amount_won = int(format_won_from_manwon_key(key))
-        except Exception as e:
-            amount_won = 0
-            
-        display_manwon = st.session_state.get(key, "") or "0"
-        
-        st.markdown(
-            f"""
-            <div style="
-                background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                border-radius:12px;
-                padding:18px 24px;
-                margin:12px 0;
-                display:flex;
-                justify-content:space-between;
-                align-items:center;
-                box-shadow:0 4px 12px rgba(102, 126, 234, 0.3);
-            ">
-                <span style="color:#ffffff;font-size:0.95rem;font-weight:600;">💾 입력금액</span>
-                <div style="text-align:right;">
-                    <div style="color:#e0e7ff;font-size:0.9rem;font-weight:500;">
+
+        with st.container(border=True):
+            st.text_input(
+                "금액 입력 (만원)",
+                key=key,
+                on_change=format_money_input,
+                args=(key,),
+                placeholder="예: 5000 (= 5,000만원)",
+            )
+
+            try:
+                amount_won = int(format_won_from_manwon_key(key))
+            except Exception:
+                amount_won = 0
+
+            display_manwon = st.session_state.get(key, "") or "0"
+            st.markdown(
+                f"""
+                <div style="
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    border-radius: 10px;
+                    padding: 14px 18px;
+                    margin-top: 8px;
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
+                ">
+                    <div style="color:#e8eeff;font-size:0.88rem;font-weight:600;margin-bottom:6px;">
+                        입력 금액
+                    </div>
+                    <div style="color:#ffffff;font-size:1.45rem;font-weight:800;line-height:1.3;">
                         {display_manwon} 만원
                     </div>
-                    <div style="color:#ffffff;font-size:1.6rem;font-weight:800;">
+                    <div style="
+                        color:#ffffff;
+                        font-size:1.05rem;
+                        font-weight:700;
+                        text-align:right;
+                        margin-top:10px;
+                        padding-top:10px;
+                        border-top:1px solid rgba(255,255,255,0.28);
+                    ">
                         {fmt_money(amount_won)}원
                     </div>
                 </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        
+                """,
+                unsafe_allow_html=True,
+            )
+
         return amount_won
 
     if "app_step" not in st.session_state:
@@ -2272,14 +2471,15 @@ def run_streamlit_app():
     total_steps = 5
     st.write(f"### {step_labels[current_step]} ({display_step}/{total_steps})")
     st.progress((display_step - 1) / (total_steps - 1))
+    _render_scroll_to_top()
 
     def move_step(new_step):
-        st.session_state["app_step"] = new_step
-        st.rerun()
+        _set_app_step(new_step)
 
     def reset_app_to_start():
         """앱을 최초 실행 상태(STEP1 · Q1)로 되돌립니다."""
         st.session_state.clear()
+        _request_scroll_to_top()
         st.rerun()
 
     def activate_admin_mode():
@@ -2303,8 +2503,7 @@ def run_streamlit_app():
             ticker: float(weight)
             for ticker, weight in zip(random_etfs, random_weights)
         }
-        st.session_state["app_step"] = 2
-        st.rerun()
+        _set_app_step(2)
 
     def step_button_row(can_next=True, can_prev=True):
         cols = st.columns([2, 2, 1])
@@ -2506,8 +2705,7 @@ def run_streamlit_app():
                             }
                             st.session_state["profile_submitted"] = True
                             st.session_state["selected_etfs"] = []
-                            st.session_state["app_step"] = 2
-                            st.rerun()
+                            _set_app_step(2)
 
                         gemini_questions.append(next_question)
                         st.session_state["current_question"] = f"G{answered_count + 1}"
@@ -2535,8 +2733,7 @@ def run_streamlit_app():
                 render_profile_metrics(profile_weights)
                 
                 if st.button("STEP2로 이동", key="proceed_to_step2"):
-                    st.session_state["app_step"] = 2
-                    st.rerun()
+                    _set_app_step(2)
             else:
                 q_data = AI_PROFILE_QUESTIONS[current_q]
                 is_multi = _is_multi_select_question(current_q)
@@ -2638,8 +2835,7 @@ def run_streamlit_app():
                             profile_weights = calculate_profile_scores(st.session_state["profile_responses"])
                             st.session_state["profile_weights"] = profile_weights
                             st.session_state["profile_submitted"] = True
-                            st.session_state["app_step"] = 2
-                            st.rerun()
+                            _set_app_step(2)
                         else:
                             st.session_state["current_question"] = next_q
                             st.rerun()
@@ -2666,14 +2862,7 @@ def run_streamlit_app():
 
         # 투자 성향 분석 결과 표시
         st.write("### 📊 당신의 투자 성향")
-        render_profile_metrics(profile_weights)
-
-        if profile_weights.get("배당집중", 0) >= 15:
-            st.info(
-                f"배당집중 성향이 **{profile_weights.get('배당집중', 0):.1f}%**입니다. "
-                "월배당·프리미엄 수익을 노리는 ETF가 포함될 수 있습니다. "
-                "위 **「배당집중이란?」** 안내를 참고해 주세요."
-            )
+        render_profile_metrics(profile_weights, show_guides=False)
 
         st.markdown("---")
         
@@ -2766,37 +2955,7 @@ def run_streamlit_app():
         st.write("### 🔄 종목 교체")
         st.caption(
             "교체는 **같은 카테고리** ETF끼리만 가능합니다. "
-            "아래 목록에서 종목을 고른 뒤 **선택한 ETF로 교체**를 누르세요."
-        )
-        st.markdown(
-            """
-            <style>
-            /* 종목 교체 라디오: 세로 레이아웃으로 가독성 향상 */
-            div[data-testid="stRadio"] label {
-                white-space: pre-line !important;
-                line-height: 1.55 !important;
-                padding: 1.0rem 0.75rem !important;
-                align-items: flex-start !important;
-                border-left: 3px solid #ddd !important;
-                margin-bottom: 0.5rem !important;
-                background-color: #f9f9f9 !important;
-                border-radius: 4px !important;
-            }
-            div[data-testid="stRadio"] label:hover {
-                background-color: #f0f0f0 !important;
-                border-left-color: #1f77b4 !important;
-            }
-            div[data-testid="stRadio"] label p {
-                white-space: pre-line !important;
-                line-height: 1.55 !important;
-                margin: 0 !important;
-            }
-            div[data-testid="stRadio"] > div {
-                gap: 0.5rem !important;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
+            "교체할 ETF **카드를 클릭**하면 바로 반영됩니다."
         )
 
         for slot_idx, current_ticker in enumerate(selected_etfs):
@@ -2807,84 +2966,21 @@ def run_streamlit_app():
             st.subheader(f"📌 {current_ticker} · {category}")
             st.write(f"포트폴리오 **{slot_idx + 1}번** 종목 — 같은 카테고리 ETF 중에서 선택")
 
-            # 현재 종목의 설명 표시
-            with st.expander(f"📊 {current_ticker} 상세 정보 보기"):
-                current_info = ETF_DATA.get(current_ticker, {})
-                st.write(f"**이름:** {current_info.get('이름', 'N/A')}")
-                st.write(f"**카테고리:** {current_info.get('카테고리', 'N/A')}")
-                st.write(f"**보수율:** {current_info.get('보수율', 0) * 100:.2f}%")
-                st.write(f"**배당:** {'있음' if current_info.get('배당') else '없음'}")
-                st.write(f"**레버리지:** {'있음 (위험)' if current_info.get('레버리지') else '없음'}")
-                if current_ticker in ETF_SUMMARY_DESCRIPTIONS:
-                    st.info(f"📝 {ETF_SUMMARY_DESCRIPTIONS[current_ticker]}")
-
             if len(replace_options) <= 1:
                 st.info(f"**{category}** 카테고리에 선택 가능한 다른 ETF가 없습니다.")
                 st.markdown("---")
                 continue
 
-            if radio_key not in st.session_state:
-                default_idx = 1 if len(replace_options) > 1 else 0
-                st.session_state[radio_key] = default_idx
-            else:
-                default_idx = 1 if len(replace_options) > 1 else 0
-                st.session_state[radio_key] = _resolve_replace_index(
-                    st.session_state.get(radio_key),
-                    replace_options,
-                    default_idx,
-                )
-
-            picked_idx = st.radio(
-                "교체할 ETF",
-                options=list(range(len(replace_options))),
-                format_func=lambda i, opts=replace_options, cur=current_ticker: _format_replace_option_label(
-                    opts[i], cur
-                ),
-                key=radio_key,
-                label_visibility="collapsed",
+            _render_horizontal_replace_selector(
+                slot_idx,
+                current_ticker,
+                replace_options,
+                radio_key,
             )
-            picked_ticker = replace_options[picked_idx]
-
-            # 교체 후보 ETF들의 비교 정보
-            with st.expander("💡 교체 가능한 ETF 비교"):
-                comparison_data = []
-                for option_ticker in replace_options:
-                    info = ETF_DATA.get(option_ticker, {})
-                    comparison_data.append({
-                        "종목": option_ticker,
-                        "이름": info.get("이름", "")[:40] + "..." if len(info.get("이름", "")) > 40 else info.get("이름", ""),
-                        "보수율(%)": f"{info.get('보수율', 0) * 100:.2f}",
-                        "배당": "O" if info.get("배당") else "X",
-                        "상태": "현재 보유" if option_ticker == current_ticker else "선택 가능"
-                    })
-                st.dataframe(comparison_data, use_container_width=True, hide_index=True)
 
             error_key = f"replace_error_{slot_idx}"
             if error_key in st.session_state:
                 st.error(st.session_state.pop(error_key))
-
-            msg_key = f"replace_msg_{slot_idx}"
-            if msg_key in st.session_state:
-                st.success(f"✅ {st.session_state.pop(msg_key)}")
-
-            replace_disabled = picked_ticker == current_ticker
-            if st.button(
-                "선택한 ETF로 교체",
-                key=f"replace_apply_{slot_idx}",
-                type="primary",
-                use_container_width=True,
-                disabled=replace_disabled,
-                help="같은 카테고리 ETF로만 교체됩니다.",
-            ):
-                _apply_etf_replace(slot_idx, current_ticker, replace_options)
-                st.rerun()
-
-            if replace_disabled:
-                st.caption("현재 보유 종목과 같습니다. 목록에서 다른 ETF를 선택해 주세요.")
-            else:
-                st.caption(
-                    f"선택됨: **{picked_ticker}** → **{current_ticker}** 자리에 반영됩니다."
-                )
 
             st.markdown("---")
 
@@ -3500,14 +3596,59 @@ def run_streamlit_app():
                 {"duration_ms": round((time.perf_counter() - render_start) * 1000, 2)},
             )
             # endregion
-            st.info(
-                "📌 급락 구간 기준:\n"
-                "내 포트폴리오 중앙값이 전월 대비 15% 이상 \n"
-                "하락한 구간을 급락 구간으로 표시합니다.\n\n"
-                "💡 급락 구간은 추가 매수 기회입니다.\n"
-                "여유 현금이 있다면 해당 시점에 추가 투자를 \n"
-                "고려해보세요. 장기적으로 저점 매수 효과를 \n"
-                "기대할 수 있습니다."
+            st.markdown(
+                """
+                <style>
+                .step6-info-box {
+                    background: #e8f4fd;
+                    border: 1px solid #b6d9f7;
+                    border-radius: 8px;
+                    padding: 16px 18px;
+                    margin: 12px 0;
+                }
+                .step6-info-row {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 12px;
+                }
+                .step6-info-row + .step6-info-row {
+                    margin-top: 14px;
+                    padding-top: 14px;
+                    border-top: 1px solid #cfe6f8;
+                }
+                .step6-info-icon {
+                    flex: 0 0 24px;
+                    width: 24px;
+                    text-align: center;
+                    font-size: 1.1rem;
+                    line-height: 1.5;
+                }
+                .step6-info-text {
+                    flex: 1;
+                    color: #0f2b46;
+                    font-size: 0.95rem;
+                    line-height: 1.6;
+                }
+                </style>
+                <div class="step6-info-box">
+                    <div class="step6-info-row">
+                        <span class="step6-info-icon">📌</span>
+                        <div class="step6-info-text">
+                            <strong>급락 구간 기준</strong><br>
+                            내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 구간을 급락 구간으로 표시합니다.
+                        </div>
+                    </div>
+                    <div class="step6-info-row">
+                        <span class="step6-info-icon">💡</span>
+                        <div class="step6-info-text">
+                            <strong>급락 구간은 추가 매수 기회입니다.</strong><br>
+                            여유 현금이 있다면 해당 시점에 추가 투자를 고려해보세요.
+                            장기적으로 저점 매수 효과를 기대할 수 있습니다.
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
         except RuntimeError as exc:
             st.error(str(exc))
