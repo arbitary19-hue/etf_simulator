@@ -1,5 +1,6 @@
 ﻿# -*- coding: utf-8 -*-
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -880,10 +881,103 @@ def recommend_etfs(profile_weights, top_n=5):
     return list(weights.keys())[:top_n]
 
 
+HISTORICAL_RETURN_LABEL = "과거 연환산 수익률"
+SIMULATION_RETURN_LABEL = "시뮬레이션 가정 수익률"
+SOURCE_YAHOO_10Y = "Yahoo · 10년"
+SOURCE_YAHOO_INCEPTION = "Yahoo · 상장 후"
+SOURCE_SIMULATION = "시뮬 가정"
+HISTORICAL_RETURN_DISCLAIMER = "과거 수익률은 미래 수익을 보장하지 않습니다."
+SIMULATION_RETURN_DISCLAIMER = (
+    "시뮬레이션 가정 수익률은 과거 연환산 수익률과 기준이 다를 수 있습니다."
+)
+
+
 def _get_etf_annual_return(ticker):
-    """ETF 예상 연 수익률을 계산합니다."""
+    """시뮬레이션 fallback용 ETF 연 수익률(모델 가정)을 계산합니다."""
     mu, _ = _get_ticker_return_profile(ticker)
-    return max(0, mu * 100)  # 음수 제거
+    return max(0, mu * 100)
+
+
+def _calc_cagr_pct_from_hist(hist):
+    if hist is None or hist.empty:
+        return None, None
+    first_close = float(hist["Close"].iloc[0])
+    last_close = float(hist["Close"].iloc[-1])
+    elapsed_years = max((hist.index[-1] - hist.index[0]).days / 365.25, 1e-6)
+    if first_close <= 0 or last_close <= 0 or elapsed_years <= 0:
+        return None, None
+    cagr_pct = ((last_close / first_close) ** (1 / elapsed_years) - 1) * 100
+    return cagr_pct, elapsed_years
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_etf_historical_return_info(ticker):
+    """표시용 과거 연환산 수익률(Yahoo). 모델 가정치는 사용하지 않습니다."""
+    if yf is None:
+        return {"pct": None, "source": None, "period_years": None}
+
+    try:
+        etf = yf.Ticker(ticker)
+        hist_10y = etf.history(period="10y", auto_adjust=True)
+        if hist_10y is not None and not hist_10y.empty and len(hist_10y) >= 252 * 3:
+            pct, years = _calc_cagr_pct_from_hist(hist_10y)
+            if pct is not None:
+                return {
+                    "pct": float(pct),
+                    "source": SOURCE_YAHOO_10Y,
+                    "period_years": float(years),
+                }
+
+        hist_max = etf.history(period="max", auto_adjust=True)
+        if hist_max is not None and not hist_max.empty and len(hist_max) >= 252:
+            pct, years = _calc_cagr_pct_from_hist(hist_max)
+            if pct is not None:
+                return {
+                    "pct": float(pct),
+                    "source": SOURCE_YAHOO_INCEPTION,
+                    "period_years": float(years),
+                }
+    except Exception:
+        pass
+
+    return {"pct": None, "source": None, "period_years": None}
+
+
+def _format_historical_return_value(hist_info):
+    pct = (hist_info or {}).get("pct")
+    if pct is None:
+        return "-"
+    return f"{pct:.1f}%"
+
+
+def _format_historical_return_line(hist_info):
+    value = _format_historical_return_value(hist_info)
+    source = (hist_info or {}).get("source")
+    if source:
+        return f"{HISTORICAL_RETURN_LABEL}: {value} (출처: {source})"
+    return f"{HISTORICAL_RETURN_LABEL}: {value}"
+
+
+def _get_etf_cagr_rate(ticker):
+    return float(ETF_DATA.get(ticker, {}).get("cagr", 0.10))
+
+
+def _get_portfolio_simulation_return(portfolio_weights):
+    """시뮬레이션용 포트폴리오 가정 수익률(CAGR 가중평균)."""
+    if not portfolio_weights:
+        return 0.06, 6.0, SOURCE_SIMULATION
+
+    rate = sum(
+        float(portfolio_weights.get(ticker, 0.0)) * _get_etf_cagr_rate(ticker)
+        for ticker in portfolio_weights
+    )
+    if rate <= 0:
+        rate = 0.06
+    return float(rate), float(rate * 100), SOURCE_SIMULATION
+
+
+def _format_simulation_return_line(rate_pct, source=SOURCE_SIMULATION):
+    return f"{SIMULATION_RETURN_LABEL}: {rate_pct:.2f}% (출처: {source})"
 
 
 def _get_risk_stars(ticker):
@@ -1137,7 +1231,7 @@ def _get_etf_dividend_yield(ticker):
 def _etf_card_html(ticker, is_selected=False):
     """ETF 카드 HTML (한 줄, 들여쓰기 없음 — markdown 코드블록 방지)."""
     info = ETF_DATA.get(ticker, {})
-    annual_return = _get_etf_annual_return(ticker)
+    hist_info = _get_etf_historical_return_info(ticker)
     risk_stars = _get_risk_stars(ticker)
     border_color = "#FF6B6B" if is_selected else "#CCCCCC"
     border_width = "3px" if is_selected else "1px"
@@ -1163,7 +1257,7 @@ def _etf_card_html(ticker, is_selected=False):
         f'<div style="font-size:11px;color:#555;margin-bottom:8px;font-style:italic;">'
         f'{ETF_CARD_DESCRIPTIONS.get(ticker, "")}</div>'
         f'<div style="font-size:13px;font-weight:bold;color:#1f77b4;">'
-        f"예상 수익률: {annual_return:.1f}%</div></div>"
+        f"{_format_historical_return_line(hist_info)}</div></div>"
     )
 
 
@@ -1249,10 +1343,8 @@ def _build_etf_replace_comparison_df(replace_options, current_ticker):
     rows = []
     for option_ticker in replace_options:
         info = ETF_DATA.get(option_ticker, {})
+        hist_info = _get_etf_historical_return_info(option_ticker)
         live_snapshot = _get_live_etf_snapshot(option_ticker)
-        annual_return = live_snapshot.get("annual_return_pct")
-        if annual_return is None:
-            annual_return = _get_etf_annual_return(option_ticker)
 
         dividend_yield = live_snapshot.get("dividend_yield_pct")
         if dividend_yield is None and info.get("배당"):
@@ -1262,7 +1354,8 @@ def _build_etf_replace_comparison_df(replace_options, current_ticker):
         is_current = option_ticker == current_ticker
         rows.append({
             "종목": f"{option_ticker} · 현재" if is_current else option_ticker,
-            "예상 수익률": f"{annual_return:.1f}%",
+            HISTORICAL_RETURN_LABEL: _format_historical_return_value(hist_info),
+            "출처": hist_info.get("source") or "-",
             "위험도": f"{'★' * risk_stars}{'☆' * (5 - risk_stars)}",
             "배당수익률": f"{dividend_yield:.1f}%" if dividend_yield is not None else "-",
             "보수율": f"{info.get('보수율', 0) * 100:.2f}%",
@@ -1277,14 +1370,17 @@ def _render_etf_replace_comparison_table(replace_options, current_ticker):
         return
 
     comparison_df = _build_etf_replace_comparison_df(replace_options, current_ticker)
-    display_cols = ["종목", "예상 수익률", "위험도", "배당수익률", "보수율"]
+    display_cols = ["종목", HISTORICAL_RETURN_LABEL, "출처", "위험도", "배당수익률", "보수율"]
 
     def _highlight_current_row(row):
         is_current = bool(comparison_df.loc[row.name, "_is_current"])
         style = "background-color: #eef5ff; font-weight: 600"
         return [style if is_current else "" for _ in row]
 
-    st.caption("같은 카테고리 ETF 한눈에 비교")
+    st.caption(
+        "같은 카테고리 ETF 한눈에 비교 · "
+        f"{HISTORICAL_RETURN_DISCLAIMER}"
+    )
     styled_df = (
         comparison_df[display_cols]
         .style.apply(_highlight_current_row, axis=1)
@@ -1819,13 +1915,24 @@ def _simulate_daily_to_monthly_median_path(
     ]
     daily_mu = annual_return / 252
     daily_sigma = annual_volatility / np.sqrt(252)
+    rng = np.random.default_rng(
+        _stable_simulation_seed(
+            annual_return,
+            annual_volatility,
+            month_end_date_keys,
+            initial_capital,
+            monthly_contribution,
+            mode,
+            trials,
+        )
+    )
 
     values = paths[:, 0].copy()
     for month, days in enumerate(business_days_by_month, start=1):
         if mode in {"적립형", "혼합형"}:
             values += monthly_contribution
         portfolio_daily_returns = np.maximum(
-            np.random.normal(daily_mu, daily_sigma, size=(trials, days)),
+            rng.normal(daily_mu, daily_sigma, size=(trials, days)),
             -0.99,
         )
         values *= np.prod(1 + portfolio_daily_returns, axis=1)
@@ -1839,7 +1946,7 @@ def _simulate_daily_to_monthly_median_path(
 def _weighted_portfolio_return_profile(weight_items):
     normalized_weights = _normalize_weights(dict(weight_items))
     annual_return = sum(
-        weight * ETF_DATA[ticker].get("cagr", _get_ticker_return_profile(ticker)[0])
+        weight * _get_etf_cagr_rate(ticker)
         for ticker, weight in normalized_weights.items()
     )
     annual_volatility = sum(
@@ -1925,7 +2032,7 @@ def _plot_portfolio_vs_sp500_monte_carlo_cached(
     month_end_date_keys = tuple(_date_cache_key(month_date) for month_date in monthly_dates)
     _, voo_sigma_daily = load_voo_daily_return_profile()
     portfolio_return, portfolio_volatility = _weighted_portfolio_return_profile(port_weight_items)
-    voo_return = ETF_DATA["VOO"].get("cagr", _get_ticker_return_profile("VOO")[0])
+    voo_return = _get_etf_cagr_rate("VOO")
     voo_volatility = voo_sigma_daily * np.sqrt(252)
 
     portfolio_median = _simulate_daily_to_monthly_median_path(
@@ -2082,6 +2189,45 @@ def _set_period_end_callback(key_prefix: str, years_offset: int):
     end_key = f"{key_prefix}_end"
     start = st.session_state.get(start_key, date.today())
     st.session_state[end_key] = add_calendar_years(start, years_offset)
+
+
+def _stable_simulation_seed(*parts):
+    seed_text = "|".join(str(part) for part in parts)
+    return int(hashlib.md5(seed_text.encode("utf-8")).hexdigest()[:8], 16)
+
+
+def _sync_unified_sim_period_end_from_years(years_value):
+    start_date = st.session_state.get(
+        "unified_sim_period_start",
+        st.session_state.get("invest_period_start", date.today()),
+    )
+    st.session_state["unified_sim_period_start"] = start_date
+    st.session_state["unified_sim_period_end"] = add_calendar_years(
+        start_date,
+        max(1, int(np.ceil(float(years_value)))),
+    )
+
+
+def _resolve_simulation_period():
+    """STEP3 분석 결과와 STEP6 차트가 같은 투자 기간을 쓰도록 맞춥니다."""
+    analysis_mode = st.session_state.get("analysis_mode", "목표 금액 달성")
+    start_date = st.session_state.get(
+        "unified_sim_period_start",
+        st.session_state.get("invest_period_start", date.today()),
+    )
+
+    if analysis_mode == "목표 기간 확인" and "unified_sim_period_end" in st.session_state:
+        end_date = st.session_state["unified_sim_period_end"]
+        if end_date < start_date:
+            years_sim = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+            end_date = add_calendar_years(start_date, max(1, int(np.ceil(years_sim))))
+        else:
+            years_sim = period_between_dates_years(start_date, end_date)
+    else:
+        years_sim = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+        end_date = add_calendar_years(start_date, max(1, int(np.ceil(years_sim))))
+
+    return start_date, end_date, years_sim
 
 
 def init_investment_period_state(key_prefix: str = "invest_period"):
@@ -2462,7 +2608,7 @@ def run_streamlit_app():
         2: "STEP2: ETF 추천",
         3: "STEP3: 모드 선택",
         4: "STEP4: 전략 추천",
-        6: "STEP6: 결과 시각화",
+        6: "STEP5: 결과 시각화",
     }
     if st.session_state["app_step"] == 5:
         st.session_state["app_step"] = 6
@@ -2897,11 +3043,9 @@ def run_streamlit_app():
             weight = etf_weights.get(ticker, 1/len(selected_etfs))
             weight_pct = round(weight * 100, 1)
             detail = ETF_DETAIL_GUIDE.get(ticker, {})
+            hist_info = _get_etf_historical_return_info(ticker)
             live_snapshot = _get_live_etf_snapshot(ticker)
             usdkrw = _get_usdkrw_rate()
-            annual_return = live_snapshot.get("annual_return_pct")
-            if annual_return is None:
-                annual_return = _get_etf_annual_return(ticker)
             current_price = live_snapshot.get("price_usd")
             dividend_yield = live_snapshot.get("dividend_yield_pct")
             if dividend_yield is None and info.get("배당"):
@@ -2916,7 +3060,7 @@ def run_streamlit_app():
                     st.write(detail["intro"])
 
                 st.write(f"• **분류(카테고리):** {category_label}")
-                st.write(f"• **역사적 연평균 수익률(추정):** {annual_return:.1f}%")
+                st.write(f"• **{_format_historical_return_line(hist_info)}**")
 
                 if current_price is not None:
                     krw_price = current_price * usdkrw
@@ -3071,15 +3215,15 @@ def run_streamlit_app():
         except Exception:
             portfolio_weights = {t: 1.0 / max(1, len(selected_etfs)) for t in selected_etfs}
         
-        portfolio_avg_return = sum(
-            portfolio_weights.get(ticker, 0) * ETF_DATA[ticker].get("cagr", 0.10)
-            for ticker in portfolio_weights
-        ) or 0.06
+        portfolio_avg_return, portfolio_avg_return_pct, sim_source = _get_portfolio_simulation_return(
+            portfolio_weights
+        )
         
         leverage_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("레버리지", False))
         dividend_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("배당", False))
         
-        st.write(f"• **예상 연평균 수익률:** {portfolio_avg_return * 100:.2f}%")
+        st.write(f"• **{_format_simulation_return_line(portfolio_avg_return_pct, sim_source)}**")
+        st.caption(SIMULATION_RETURN_DISCLAIMER)
         st.write(f"• **배당 ETF 포함:** {dividend_count}개")
         st.write(f"• **레버리지 ETF 포함:** {leverage_count}개")
 
@@ -3298,10 +3442,9 @@ def run_streamlit_app():
         step3_selected_etfs = st.session_state.get("selected_etfs", [])
         step3_etf_weights = st.session_state.get("etf_weights", {})
         step3_portfolio_weights = build_portfolio_weights(step3_selected_etfs, step3_etf_weights) if step3_selected_etfs else {}
-        step3_avg_return = sum(
-            step3_portfolio_weights.get(ticker, 0) * ETF_DATA[ticker].get("cagr", 0.10)
-            for ticker in step3_portfolio_weights
-        ) or 0.06
+        step3_avg_return, step3_avg_return_pct, step3_sim_source = _get_portfolio_simulation_return(
+            step3_portfolio_weights
+        )
 
         # ===== 분석 모드 선택 =====
         st.markdown("#### 🎯 1단계: 분석 모드 선택")
@@ -3444,6 +3587,10 @@ def run_streamlit_app():
         
         # ===== 분석 결과 표시 =====
         st.markdown("#### 📈 3단계: 분석 결과")
+        st.caption(
+            f"{_format_simulation_return_line(step3_avg_return_pct, step3_sim_source)} · "
+            f"{SIMULATION_RETURN_DISCLAIMER}"
+        )
         
         # 기본 정보 표시
         if selected_analysis_mode == "목표 금액 달성":
@@ -3493,6 +3640,7 @@ def run_streamlit_app():
                 months_remain = total_months % 12
                 
                 st.session_state["years"] = total_months / 12.0
+                _sync_unified_sim_period_end_from_years(st.session_state["years"])
                 
                 st.markdown(
                     f"""
@@ -3505,7 +3653,7 @@ def run_streamlit_app():
                     ">
                         <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">📅 예상 달성 기간</div>
                         <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{years_calc}년 {months_remain}개월</div>
-                        <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
+                        <div style="font-size:0.9rem;opacity:0.85;">시뮬레이션 가정 {step3_avg_return_pct:.2f}% 기준 (출처: {step3_sim_source})</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -3519,6 +3667,7 @@ def run_streamlit_app():
             st.session_state["current_capital"] = current_capital
             st.session_state["target_years"] = target_years_val
             st.session_state["years"] = target_years_val
+            _sync_unified_sim_period_end_from_years(target_years_val)
             
             months = int(target_years_val * 12)
             monthly_r = step3_avg_return / 12
@@ -3541,7 +3690,7 @@ def run_streamlit_app():
                 ">
                     <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">💰 예상 달성 금액</div>
                     <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{fmt_money(achievable_amount)}원</div>
-                    <div style="font-size:0.9rem;opacity:0.85;">연평균 {step3_avg_return*100:.2f}% 수익률 기준</div>
+                    <div style="font-size:0.9rem;opacity:0.85;">시뮬레이션 가정 {step3_avg_return_pct:.2f}% 기준 (출처: {step3_sim_source})</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3565,16 +3714,30 @@ def run_streamlit_app():
 
         etf_weights = st.session_state.get("etf_weights", {})
         port_weights = build_portfolio_weights(selected_etfs, etf_weights)
-        years_sim = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
         current_capital = float(st.session_state.get("current_capital", 0.0))
         monthly_won = int(st.session_state.get("monthly_contribution", 0))
         recommended_mode = _recommended_investment_mode_from_profile()
-        start_date = st.session_state.get("unified_sim_period_start", st.session_state.get("invest_period_start", date.today()))
-        if "unified_sim_period_end" in st.session_state:
-            end_date = st.session_state["unified_sim_period_end"]
-        else:
-            end_date = add_calendar_years(start_date, max(1, int(np.ceil(years_sim))))
+        start_date, end_date, years_sim = _resolve_simulation_period()
+        step6_avg_return, step6_avg_return_pct, step6_sim_source = _get_portfolio_simulation_return(
+            port_weights
+        )
         st.write("### 결과 시각화")
+
+        summary_cols = st.columns(4)
+        with summary_cols[0]:
+            st.metric("투자 기간", format_period_label(start_date, end_date))
+        with summary_cols[1]:
+            st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
+        with summary_cols[2]:
+            st.metric("월 적립금", f"{fmt_money(monthly_won)}원")
+        with summary_cols[3]:
+            st.metric("투자 방식", recommended_mode)
+
+        st.caption(
+            f"{_format_simulation_return_line(step6_avg_return_pct, step6_sim_source)} · "
+            f"아래 그래프는 변동성을 반영한 몬테카를로 중앙값 경로입니다. "
+            f"STEP3 고정 수익률 계산과 숫자가 다를 수 있습니다."
+        )
         try:
             with st.spinner("시뮬레이션 계산 중..."):
                 fig = plot_portfolio_vs_sp500_monte_carlo(
