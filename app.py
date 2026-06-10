@@ -103,9 +103,7 @@ def load_etf_cagr():
     for ticker in ETF_DATA:
         try:
             etf = yf.Ticker(ticker)
-            hist = etf.history(period="10y", auto_adjust=True)
-            if hist is None or hist.empty or len(hist) < 252 * 3:
-                hist = etf.history(period="max", auto_adjust=True)
+            hist = etf.history(period="max", auto_adjust=True)
             if hist is not None and len(hist) > 0:
                 start = hist['Close'].iloc[0]
                 end = hist['Close'].iloc[-1]
@@ -123,7 +121,47 @@ def load_etf_cagr():
 AI_PROFILE_CATEGORIES = ["지수추적", "배당성장", "배당집중", "레버리지"]
 
 # 포트폴리오 내 레버리지 ETF 비중 상한 (0~1)
-LEVERAGE_MAX_PORTFOLIO_WEIGHT = 0.30
+LEVERAGE_MAX_PORTFOLIO_WEIGHT = 0.50
+
+
+def _cap_profile_leverage_pct(profile_weights, max_share=LEVERAGE_MAX_PORTFOLIO_WEIGHT):
+    """투자 성향 비율에서도 레버리지 성향이 상한을 넘지 않도록 조정합니다."""
+    if not profile_weights:
+        return profile_weights
+
+    capped = dict(profile_weights)
+    regular_weights = {
+        cat: max(0.0, float(capped.get(cat, 0.0)))
+        for cat in AI_PROFILE_CATEGORIES
+    }
+    total = sum(regular_weights.values())
+    if total <= 0:
+        return capped
+
+    normalized = {cat: regular_weights[cat] / total * 100 for cat in AI_PROFILE_CATEGORIES}
+    leverage_cap_pct = (max_share if capped.get("_leverage_allowed", True) else 0.0) * 100
+    leverage_pct = normalized["레버리지"]
+    if leverage_pct <= leverage_cap_pct:
+        for cat in AI_PROFILE_CATEGORIES:
+            capped[cat] = round(normalized[cat], 2)
+        return capped
+
+    freed_pct = leverage_pct - leverage_cap_pct
+    normalized["레버리지"] = leverage_cap_pct
+    non_leverage_categories = [cat for cat in AI_PROFILE_CATEGORIES if cat != "레버리지"]
+    non_leverage_total = sum(normalized[cat] for cat in non_leverage_categories)
+    if non_leverage_total > 0:
+        for cat in non_leverage_categories:
+            normalized[cat] += freed_pct * (normalized[cat] / non_leverage_total)
+    else:
+        per_category = freed_pct / len(non_leverage_categories)
+        for cat in non_leverage_categories:
+            normalized[cat] = per_category
+
+    for cat in AI_PROFILE_CATEGORIES:
+        capped[cat] = round(normalized[cat], 2)
+    return capped
+
 
 COVERED_CALL_EXPLANATION = """
 **배당집중**은 쉽게 말해, 보유한 자산에서 나오는 일부 상승 기회를 대신해
@@ -422,7 +460,7 @@ def calculate_profile_scores(responses):
     else:
         profile["_leverage_allowed"] = scores["레버리지"] > 0 or leverage_from_q7
 
-    return profile
+    return _cap_profile_leverage_pct(profile)
 
 
 def get_question_text_and_choices(q_key):
@@ -676,6 +714,7 @@ def _generate_gemini_profile_result(answers):
         raise ValueError("Gemini 최종 비율이 올바르지 않습니다.")
     weights = {cat: round((weights[cat] / total) * 100, 2) for cat in AI_PROFILE_CATEGORIES}
     weights["_leverage_allowed"] = bool(data.get("leverage_allowed", weights.get("레버리지", 0) > 0))
+    weights = _cap_profile_leverage_pct(weights)
     funding = data.get("funding_situation", {})
     return weights, {
         "has_lump_sum": bool(funding.get("has_lump_sum", True)),
@@ -764,6 +803,7 @@ def _activate_fixed_profile_fallback():
 
 def render_profile_metrics(profile_weights, show_guides=True):
     """투자 성향 비율을 표시하고, 필요 시 배당집중·레버리지 안내를 함께 표시합니다."""
+    profile_weights = _cap_profile_leverage_pct(profile_weights)
     cols = st.columns(len(AI_PROFILE_CATEGORIES))
     for i, cat in enumerate(AI_PROFILE_CATEGORIES):
         with cols[i]:
@@ -791,6 +831,7 @@ CATEGORY_TO_ETFS = {
 
 def _normalize_profile_weights(profile_weights):
     """4개 투자 성향 카테고리 비중을 0~1로 정규화합니다."""
+    profile_weights = _cap_profile_leverage_pct(profile_weights)
     regular_weights = {cat: float(profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES}
     if not profile_weights.get("_leverage_allowed", True):
         regular_weights["레버리지"] = 0
@@ -856,6 +897,28 @@ def recommend_etfs_with_weights(profile_weights, top_n=5):
     leverage_allowed = profile_weights.get("_leverage_allowed", True)
     normalized = _normalize_profile_weights(profile_weights)
     category_counts = _adjust_category_counts(normalized, top_n)
+    # 성향 비율이 양수인 카테고리는 최소 1개 ETF가 선택되도록 보정
+    positive_categories = [
+        c for c in AI_PROFILE_CATEGORIES
+        if normalized.get(c, 0.0) > 0 and (c != "레버리지" or leverage_allowed)
+    ]
+    for category in positive_categories:
+        category_counts[category] = max(1, int(category_counts.get(category, 0)))
+    while sum(category_counts.values()) > top_n:
+        reducible = [
+            c for c in AI_PROFILE_CATEGORIES
+            if category_counts.get(c, 0) > 1 and (c != "레버리지" or leverage_allowed)
+        ]
+        if not reducible:
+            break
+        drop_category = max(reducible, key=lambda c: category_counts[c])
+        category_counts[drop_category] -= 1
+    while sum(category_counts.values()) < top_n:
+        add_category = max(
+            [c for c in AI_PROFILE_CATEGORIES if c != "레버리지" or leverage_allowed],
+            key=lambda c: normalized.get(c, 0.0),
+        )
+        category_counts[add_category] = int(category_counts.get(add_category, 0)) + 1
     sorted_categories = sorted(
         AI_PROFILE_CATEGORIES, key=lambda c: normalized[c], reverse=True
     )
@@ -898,7 +961,6 @@ def recommend_etfs_with_weights(profile_weights, top_n=5):
     if total_weight > 0:
         weights = {ticker: round(w / total_weight, 4) for ticker, w in weights.items()}
 
-    weights = _cap_leverage_weights(weights)
     return dict(sorted(weights.items(), key=lambda x: x[1], reverse=True))
 
 
@@ -908,15 +970,45 @@ def recommend_etfs(profile_weights, top_n=5):
     return list(weights.keys())[:top_n]
 
 
+def _allocate_profile_weights_to_selected_etfs(selected_etfs, profile_weights):
+    """현재 선택된 ETF 목록에 성향 비율을 카테고리별로 배분합니다."""
+    if not selected_etfs:
+        return {}
+
+    normalized = _normalize_profile_weights(profile_weights)
+    by_category = {}
+    for ticker in selected_etfs:
+        category = ETF_DATA.get(ticker, {}).get("카테고리")
+        if category:
+            by_category.setdefault(category, []).append(ticker)
+
+    weights = {}
+    for category, tickers in by_category.items():
+        if not tickers:
+            continue
+        cat_weight = float(normalized.get(category, 0.0))
+        per_ticker = cat_weight / len(tickers)
+        for ticker in tickers:
+            weights[ticker] = per_ticker
+
+    total = sum(weights.values())
+    if total <= 0:
+        equal = 1.0 / len(selected_etfs)
+        return _cap_leverage_weights({ticker: round(equal, 4) for ticker in selected_etfs})
+    normalized_weights = {
+        ticker: round(weights.get(ticker, 0.0) / total, 4)
+        for ticker in selected_etfs
+    }
+    return _cap_leverage_weights(normalized_weights)
+
+
 HISTORICAL_RETURN_LABEL = "과거 연환산 수익률"
 SIMULATION_RETURN_LABEL = "시뮬레이션 가정 수익률"
-SOURCE_YAHOO_10Y = "Yahoo · 10년"
 SOURCE_YAHOO_INCEPTION = "Yahoo · 상장 후"
-SOURCE_YAHOO_10Y_FIRST = "Yahoo · 10년 우선"
 SOURCE_SIMULATION = "시뮬 가정"
 HISTORICAL_RETURN_DISCLAIMER = "과거 수익률은 미래 수익을 보장하지 않습니다."
 SIMULATION_RETURN_DISCLAIMER = (
-    "시뮬레이션 가정 수익률은 Yahoo 10년 CAGR을 우선 사용하며, 데이터가 부족하면 상장 후 CAGR을 사용합니다."
+    "시뮬레이션 가정 수익률은 Yahoo 상장 이후 전체 기간 CAGR을 사용합니다."
 )
 
 
@@ -951,22 +1043,12 @@ def _calc_cagr_pct_from_hist(hist):
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def _get_etf_historical_return_info(ticker):
-    """표시용 과거 연환산 수익률(Yahoo). 모델 가정치는 사용하지 않습니다."""
+    """표시용 과거 연환산 수익률(Yahoo 상장 이후 전체 기간). 모델 가정치는 사용하지 않습니다."""
     if yf is None:
         return {"pct": None, "source": None, "period_years": None}
 
     try:
         etf = yf.Ticker(ticker)
-        hist_10y = etf.history(period="10y", auto_adjust=True)
-        if hist_10y is not None and not hist_10y.empty and len(hist_10y) >= 252 * 3:
-            pct, years = _calc_cagr_pct_from_hist(hist_10y)
-            if pct is not None:
-                return {
-                    "pct": float(pct),
-                    "source": SOURCE_YAHOO_10Y,
-                    "period_years": float(years),
-                }
-
         hist_max = etf.history(period="max", auto_adjust=True)
         if hist_max is not None and not hist_max.empty and len(hist_max) >= 252:
             pct, years = _calc_cagr_pct_from_hist(hist_max)
@@ -1007,7 +1089,7 @@ def _get_etf_cagr_rate(ticker):
 
 
 def _get_portfolio_simulation_return(portfolio_weights):
-    """시뮬레이션용 포트폴리오 가정 수익률(10년 우선 CAGR 가중평균)."""
+    """시뮬레이션용 포트폴리오 가정 수익률(상장 이후 전체 기간 CAGR 가중평균)."""
     if not portfolio_weights:
         return 0.06, 6.0, SOURCE_SIMULATION
 
@@ -1022,10 +1104,8 @@ def _get_portfolio_simulation_return(portfolio_weights):
     }
     if not np.isfinite(rate) or rate <= 0:
         rate = 0.06
-    if sources == {SOURCE_YAHOO_10Y}:
-        source = SOURCE_YAHOO_10Y
-    elif sources and sources <= {SOURCE_YAHOO_10Y, SOURCE_YAHOO_INCEPTION}:
-        source = SOURCE_YAHOO_10Y_FIRST
+    if sources == {SOURCE_YAHOO_INCEPTION}:
+        source = SOURCE_YAHOO_INCEPTION
     else:
         source = SOURCE_SIMULATION
     return float(rate), float(rate * 100), source
@@ -1251,8 +1331,8 @@ def _get_live_etf_snapshot(ticker):
             dividend_yield = info.get("dividendYield")
 
         annual_return_pct = None
-        hist = etf.history(period="10y", auto_adjust=True)
-        if hist is not None and not hist.empty and len(hist) >= 252 * 3:
+        hist = etf.history(period="max", auto_adjust=True)
+        if hist is not None and not hist.empty and len(hist) >= 252:
             first_close = float(hist["Close"].iloc[0])
             last_close = float(hist["Close"].iloc[-1])
             elapsed_years = max((hist.index[-1] - hist.index[0]).days / 365.25, 1e-6)
@@ -1602,7 +1682,7 @@ def get_exchange_rate_params():
     if yf is None:
         return 0.0, 0.025
 
-    hist = yf.Ticker("USDKRW=X").history(period="10y", interval="1mo", auto_adjust=True)
+    hist = yf.download("USDKRW=X", start="2005-01-01", interval="1mo", auto_adjust=True, progress=False)
     if hist is None or hist.empty or "Close" not in hist:
         return 0.0, 0.025
 
@@ -1613,7 +1693,7 @@ def get_exchange_rate_params():
     if monthly_returns.empty:
         return 0.0, 0.025
 
-    mu_fx = float(monthly_returns.mean())
+    mu_fx = 0.0006
     sigma_fx = float(monthly_returns.std(ddof=1))
     if not np.isfinite(mu_fx) or not np.isfinite(sigma_fx):
         return 0.0, 0.025
@@ -1698,14 +1778,12 @@ def _get_usdkrw_monthly_stats():
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def _get_voo_daily_stats_since_2008():
+def _get_voo_daily_stats_since_inception():
     if yf is None:
         return 0.08, 0.16
 
     try:
-        hist = yf.Ticker("VOO").history(start="2008-01-01", auto_adjust=True)
-        if hist is None or hist.empty or len(hist) < 252:
-            hist = yf.Ticker("VOO").history(period="max", auto_adjust=True)
+        hist = yf.Ticker("VOO").history(period="max", auto_adjust=True)
         daily_returns = hist["Close"].dropna().pct_change().dropna()
         if len(daily_returns) < 252:
             return 0.08, 0.16
@@ -1718,7 +1796,7 @@ def _get_voo_daily_stats_since_2008():
 
 def _get_portfolio_voo_based_stats(etf_weights):
     normalized_weights = _normalize_weights(etf_weights)
-    base_mu, base_sigma = _get_voo_daily_stats_since_2008()
+    base_mu, base_sigma = _get_voo_daily_stats_since_inception()
 
     portfolio_mu = 0.0
     portfolio_sigma = 0.0
@@ -2228,7 +2306,7 @@ def load_voo_daily_return_profile():
     if yf is None:
         raise RuntimeError("yfinance가 설치되어 있지 않습니다.")
 
-    hist = yf.Ticker("VOO").history(start="2008-01-01", auto_adjust=True)
+    hist = yf.Ticker("VOO").history(period="max", auto_adjust=True)
     if hist.empty or "Close" not in hist:
         raise RuntimeError("VOO 가격 데이터를 불러오지 못했습니다.")
 
@@ -2323,7 +2401,7 @@ def _weighted_portfolio_return_profile(weight_items):
     return float(annual_return), float(annual_volatility)
 
 
-def _detect_drawdown_marker_indices(values, threshold=-0.15):
+def _detect_drawdown_marker_indices(values, threshold=-0.10):
     monthly_changes = np.diff(values) / np.maximum(values[:-1], 1)
     marker_indices = set()
     idx = 1
@@ -2350,6 +2428,55 @@ def _detect_drawdown_marker_indices(values, threshold=-0.15):
         idx = recovery_idx + 1
 
     return sorted(marker_indices)
+
+
+def _count_monthly_crashes(values, threshold=-0.10):
+    values = np.asarray(values, dtype=float)
+    if len(values) < 2:
+        return 0
+    monthly_changes = np.diff(values) / np.maximum(values[:-1], 1)
+    return int(np.sum(monthly_changes <= threshold))
+
+
+def _target_crash_count_for_months(months):
+    if months <= 60:
+        return 1
+    if months <= 120:
+        return 2
+    return 3
+
+
+def _select_representative_crash_path(paths, median_path, months, threshold=-0.10):
+    """Step5 시각화용: 급락이 포함되면서 최종값은 중앙값에 가까운 경로를 고릅니다."""
+    paths = np.asarray(paths, dtype=float)
+    median_path = np.asarray(median_path, dtype=float)
+    if paths.ndim != 2 or paths.shape[0] == 0 or paths.shape[1] == 0:
+        return median_path, 0, 0, False
+
+    plot_len = min(paths.shape[1], len(median_path), max(int(months), 0) + 1)
+    if plot_len <= 0:
+        return median_path, 0, 0, False
+
+    candidate_paths = paths[:, :plot_len]
+    target_count = _target_crash_count_for_months(max(plot_len - 1, 0))
+    crash_counts = np.array([
+        _count_monthly_crashes(path, threshold)
+        for path in candidate_paths
+    ])
+    final_median = float(median_path[min(plot_len - 1, len(median_path) - 1)]) if len(median_path) else 0.0
+    final_distances = np.abs(candidate_paths[:, -1] - final_median)
+
+    eligible = np.where(crash_counts >= target_count)[0]
+    if len(eligible) > 0:
+        selected_idx = int(eligible[np.argmin(final_distances[eligible])])
+    else:
+        max_crashes = int(np.max(crash_counts)) if len(crash_counts) else 0
+        closest = np.where(crash_counts == max_crashes)[0]
+        selected_idx = int(closest[np.argmin(final_distances[closest])])
+
+    selected_path = candidate_paths[selected_idx]
+    selected_count = int(crash_counts[selected_idx])
+    return selected_path, selected_count, target_count, len(eligible) > 0
 
 
 def plot_portfolio_vs_sp500_monte_carlo(
@@ -2442,7 +2569,7 @@ def _plot_portfolio_vs_sp500_monte_carlo_cached(
     monthly_changes = np.diff(portfolio_median) / np.maximum(portfolio_median[:-1], 1)
     y_midpoint = (float(np.min(portfolio_median)) + float(np.max(portfolio_median))) / 2
     for idx, monthly_change in enumerate(monthly_changes, start=1):
-        if monthly_change <= -0.15:
+        if monthly_change <= -0.10:
             annotation_ay = 90 if portfolio_median[idx] >= y_midpoint else -90
             fig.add_annotation(
                 x=monthly_dates[idx],
@@ -2676,13 +2803,17 @@ def build_portfolio_weights(etfs, etf_weights=None):
     if not etfs:
         raise ValueError("추천 ETF 목록이 비어 있습니다.")
     
-    # etf_weights가 있으면 사용
+    # etf_weights가 있으면 사용, 없으면 균등 분배
     if etf_weights:
-        return {ticker: etf_weights.get(ticker, 1/len(etfs)) for ticker in etfs}
-    
-    # 없으면 균등 분배
-    weight = 1.0 / len(etfs)
-    return {ticker: weight for ticker in etfs}
+        raw_weights = {ticker: float(etf_weights.get(ticker, 0.0)) for ticker in etfs}
+        if sum(raw_weights.values()) <= 0:
+            raw_weights = {ticker: 1.0 / len(etfs) for ticker in etfs}
+    else:
+        raw_weights = {ticker: 1.0 / len(etfs) for ticker in etfs}
+
+    normalized_weights = _normalize_weights(raw_weights)
+    # 추천 이후 상태 변경(교체/수동 조정 등)에서도 레버리지 상한을 일관 적용
+    return _cap_leverage_weights(normalized_weights)
 
 
 def _max_profile_pct(profile_weights):
@@ -3030,6 +3161,9 @@ def run_streamlit_app():
             move_step(6 if current_step == 4 else min(6, current_step + 1))
 
     profile_weights = st.session_state.get("profile_weights")
+    if profile_weights:
+        profile_weights = _cap_profile_leverage_pct(profile_weights)
+        st.session_state["profile_weights"] = profile_weights
     selected_etfs = st.session_state.get("selected_etfs", [])
     simulation_results = st.session_state.get("simulation_results")
 
@@ -3364,14 +3498,24 @@ def run_streamlit_app():
                 move_step(1)
             return
 
-        if not selected_etfs:
+        # 프로필이 바뀐 경우에만 자동 재추천하고, 그 외에는 수동 교체 상태를 유지
+        _profile_signature = str(
+            sorted(
+                (cat, float(profile_weights.get(cat, 0.0)))
+                for cat in AI_PROFILE_CATEGORIES + ["_leverage_allowed"]
+            )
+        )
+        _last_profile_signature = st.session_state.get("step2_profile_signature")
+        _should_recommend = (not selected_etfs) or (_last_profile_signature != _profile_signature)
+
+        if _should_recommend:
             selected_etfs = recommend_etfs(profile_weights, top_n=5)
-            # 비중 계산
-            etf_weights = recommend_etfs_with_weights(profile_weights, top_n=5)
-            st.session_state["etf_weights"] = etf_weights
             st.session_state["selected_etfs"] = selected_etfs
-        else:
-            etf_weights = st.session_state.get("etf_weights", {})
+            st.session_state["step2_profile_signature"] = _profile_signature
+
+        # 비중은 현재 성향(profile_weights) 기준으로 항상 재계산
+        etf_weights = _allocate_profile_weights_to_selected_etfs(selected_etfs, profile_weights)
+        st.session_state["etf_weights"] = etf_weights
 
         # 투자 성향 분석 결과 표시
         st.write("### 📊 당신의 투자 성향")
@@ -3585,7 +3729,7 @@ def run_streamlit_app():
         portfolio_data = []
         for idx, ticker in enumerate(selected_etfs, 1):
             info = ETF_DATA.get(ticker, {})
-            weight = etf_weights.get(ticker, 1 / len(selected_etfs))
+            weight = portfolio_weights.get(ticker, 1 / len(selected_etfs))
             portfolio_data.append({
                 "순위": idx,
                 "ETF": ticker,
@@ -3609,18 +3753,24 @@ def run_streamlit_app():
         # ===== 섹션 3: 투자 목표 및 시나리오 =====
         st.markdown("### 🎲 3. 투자 목표 및 시나리오")
 
-        # 포트폴리오 예상 연 수익률 (일별 μ → 연환산)
+        # 포트폴리오 예상 연 수익률 (ETF 상장 이후 CAGR 가중평균)
         try:
-            _mu_daily, _ = get_portfolio_params(portfolio_weights)
-            _annual_return_pct = ((1 + _mu_daily) ** 252 - 1) * 100
+            _, _annual_return_pct, _annual_return_source = _get_portfolio_simulation_return(portfolio_weights)
         except Exception:
             _annual_return_pct = None
+            _annual_return_source = None
+
+        _expected_amount_label = "목표 금액"
+        _expected_amount_value = f"{fmt_money(target_won)}원"
+        if selected_mode == "목표 기간 확인" and len(median_path):
+            _expected_amount_label = "예상 달성 금액"
+            _expected_amount_value = f"{fmt_money(int(float(median_path[-1])))}원"
 
         goal_col1, goal_col2, goal_col3, goal_col4 = st.columns(4)
         with goal_col1:
             st.metric("현재 보유 자금", f"{fmt_money(int(current_capital))}원")
         with goal_col2:
-            st.metric("목표 금액", f"{fmt_money(target_won)}원")
+            st.metric(_expected_amount_label, _expected_amount_value)
         with goal_col3:
             st.metric("시작 환율", f"{ref_exchange_rate:,.0f}원/달러")
         with goal_col4:
@@ -3628,6 +3778,8 @@ def run_streamlit_app():
                 st.metric("포트폴리오 예상 연 수익률", f"{_annual_return_pct:.1f}%")
             else:
                 st.metric("포트폴리오 예상 연 수익률", "산출 불가")
+        if _annual_return_source:
+            st.caption(f"수익률 기준: {_annual_return_source} CAGR 가중평균")
 
         st.write(f"**분석 모드:** {selected_mode}")
 
@@ -3672,45 +3824,64 @@ def run_streamlit_app():
         dividend_yields = {
             ticker: dy
             for ticker in selected_etfs
-            if (dy := _get_etf_dividend_yield(ticker)) is not None and dy >= 0.01
+            if ETF_DATA.get(ticker, {}).get("카테고리") in {"배당성장", "배당집중"}
+            and (dy := _get_etf_dividend_yield(ticker)) is not None
+            and 0.01 <= dy <= 0.20
         }
 
         if not dividend_yields:
-            st.info("배당수익률 1% 이상 ETF가 없어 월 배당금 예상치를 표시하지 않습니다.")
+            st.info("배당성장/배당집중 ETF가 없어 월 배당금 예상치를 표시하지 않습니다.")
         else:
             _dm = min(max(0, int(dividend_report_months)), max(0, len(median_path) - 1))
 
-            # 배당금은 달러로 누적 (재투자 없음), 종료 시점 환율로 원화 환전
+            # 목표 시점 예측 환율: 현재 환율에 월별 환율 변화 기댓값(mu_fx)을 복리로 적용
+            _mu_fx_div = 0.0
+            try:
+                _mu_fx_div, _ = get_exchange_rate_params()
+                _final_exchange_rate = ref_exchange_rate * ((1 + _mu_fx_div) ** _dm)
+            except Exception:
+                _final_exchange_rate = ref_exchange_rate
+
+            # 배당 ETF는 전체 포트폴리오 성장률이 아니라 ETF별 자체 CAGR로 별도 추정
             _cumulative_div_usd = 0.0
             _final_monthly_div_usd = 0.0
-            _final_div_asset_won = 0.0
+            _final_div_asset_usd = 0.0
+            _dividend_asset_usd = {
+                _ticker: (current_capital * portfolio_weights.get(_ticker, 0)) / ref_exchange_rate
+                for _ticker in dividend_yields
+            }
+            _monthly_growth_rates = {
+                _ticker: (1 + max(_get_etf_cagr_rate(_ticker), -0.99)) ** (1 / 12) - 1
+                for _ticker in dividend_yields
+            }
 
-            for _month in range(_dm + 1):
-                _won_val = float(median_path[_month]) if _month < len(median_path) else float(median_path[-1])
+            for _month in range(1, _dm + 1):
+                _month_exchange_rate = ref_exchange_rate * ((1 + _mu_fx_div) ** _month)
                 _month_div_usd = 0.0
-                _month_asset_won = 0.0
                 for _ticker, _dy in dividend_yields.items():
-                    _etf_won = _won_val * portfolio_weights.get(_ticker, 0)
-                    _etf_usd = _etf_won / ref_exchange_rate
-                    _ann_div_usd = _etf_usd * _dy
+                    _weight = portfolio_weights.get(_ticker, 0)
+                    if monthly_won > 0 and _weight > 0:
+                        _dividend_asset_usd[_ticker] += (monthly_won * _weight) / _month_exchange_rate
+                    _dividend_asset_usd[_ticker] *= max(0.0, 1 + _monthly_growth_rates.get(_ticker, 0.0))
+                    _ann_div_usd = _dividend_asset_usd[_ticker] * _dy
                     _mon_div_usd = _ann_div_usd / 12 if _ticker in MONTHLY_DIVIDEND_ETFS else (_ann_div_usd / 4) / 3
                     _month_div_usd += _mon_div_usd
-                    _month_asset_won += _etf_won
+                _cumulative_div_usd += _month_div_usd
                 if _month == _dm:
                     _final_monthly_div_usd = _month_div_usd
-                    _final_div_asset_won = _month_asset_won
-                if _month < _dm:
-                    _cumulative_div_usd += _month_div_usd
 
-            # 마지막 환율 기준 원화 환전
-            _monthly_div_won = int(round(_final_monthly_div_usd * ref_exchange_rate))
+            _final_div_asset_usd = sum(_dividend_asset_usd.values())
+
+            # 목표 시점 예측 환율 기준 원화 환전
+            _monthly_div_won = int(round(_final_monthly_div_usd * _final_exchange_rate))
+            _final_div_asset_won = _final_div_asset_usd * _final_exchange_rate
             _final_div_asset_won_int = int(round(_final_div_asset_won))
-            _cumulative_div_won = int(round(_cumulative_div_usd * ref_exchange_rate))
+            _cumulative_div_won = int(round(_cumulative_div_usd * _final_exchange_rate))
 
             _div_weight_sum = sum(portfolio_weights.get(t, 0) for t in dividend_yields)
             _invested_won = (current_capital + monthly_won * _dm) * _div_weight_sum
             _div_return_pct = (
-                ((_final_div_asset_won + _cumulative_div_usd * ref_exchange_rate) / _invested_won - 1) * 100
+                ((_final_div_asset_won + _cumulative_div_usd * _final_exchange_rate) / _invested_won - 1) * 100
                 if _invested_won > 0
                 else 0.0
             )
@@ -3730,7 +3901,7 @@ def run_streamlit_app():
                 ">
                     <div style="font-size:1.05rem;font-weight:700;margin-bottom:8px;opacity:0.95;">💸 {_period_lbl} 매달 받는 배당금</div>
                     <div style="font-size:3.2rem;font-weight:900;line-height:1.05;letter-spacing:-1px;">{_monthly_div_won:,}원</div>
-                    <div style="font-size:0.9rem;margin-top:8px;opacity:0.78;">배당금은 세전 기준 · 달러 누적 후 환율 {ref_exchange_rate:,.0f}원/$ 기준 환전</div>
+                    <div style="font-size:0.9rem;margin-top:8px;opacity:0.78;">배당금은 세전 기준 · 달러 누적 후 목표 시점 예측 환율 {_final_exchange_rate:,.0f}원/$ 기준 환전</div>
                     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:26px;">
                         <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💼 배당 ETF 총 자산 {_final_div_asset_won_int:,}원</div>
                         <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">↗ 배당 ETF 수익률 {_div_return_pct:,.1f}%</div>
@@ -3756,7 +3927,7 @@ def run_streamlit_app():
         # session_state 캐시 — 입력이 바뀌지 않으면 Gemini를 재호출하지 않음
         _ai_cache_key = str((
             sorted(profile_weights.items()),
-            sorted(etf_weights.items()),
+            sorted(portfolio_weights.items()),
             _investment_method,
             target_won,
             int(_analysis_years),
@@ -4007,7 +4178,10 @@ def run_streamlit_app():
                 with st.spinner("환율과 ETF 변동성을 반영해 시뮬레이션 중입니다..."):
                     start_rate = get_current_exchange_rate()
                     mu_fx, sigma_fx = get_exchange_rate_params()
-                    mu_portfolio, sigma_portfolio = get_portfolio_params(step3_portfolio_weights)
+                    _portfolio_annual_rate, _, _ = _get_portfolio_simulation_return(step3_portfolio_weights)
+                    # 기대수익률은 CAGR(기하평균) 기준을 일별 로그수익률로 변환해 과대추정을 완화
+                    mu_portfolio = np.log1p(max(_portfolio_annual_rate, -0.99)) / 252
+                    _, sigma_portfolio = get_portfolio_params(step3_portfolio_weights)
                     # region agent log
                     _debug_b8b036_log(
                         "initial",
@@ -4070,6 +4244,10 @@ def run_streamlit_app():
                     simulation_result["target_months"] = target_months
                     simulation_result["achievement_prob"] = achievement_prob
                     simulation_result["required_monthly_contribution"] = int(required_monthly)
+                    # STEP6 비교선에서도 동일한 환율 조건을 재사용하기 위해 저장
+                    simulation_result["sim_start_rate"] = float(start_rate)
+                    simulation_result["sim_mu_fx"] = float(mu_fx)
+                    simulation_result["sim_sigma_fx"] = float(sigma_fx)
                     # region agent log
                     _debug_b8b036_log(
                         "initial",
@@ -4186,6 +4364,7 @@ def run_streamlit_app():
 
         # ── session_state에서 데이터 로드 (재계산 없음) ─────────────────────
         median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
+        sim_paths = np.asarray(simulation_result.get("paths", []), dtype=float)
 
         # "목표 금액 달성" 모드는 최대 100년 시뮬레이션 후 달성 시점만 저장
         # → median_path를 달성 시점까지만 잘라낸다
@@ -4194,6 +4373,8 @@ def run_streamlit_app():
         if _s_mode == "목표 금액 달성" and _target_months_stored is not None:
             _cutoff = int(_target_months_stored) + 1
             median_path = median_path[:_cutoff]
+            if sim_paths.ndim == 2:
+                sim_paths = sim_paths[:, :_cutoff]
 
         current_capital = float(st.session_state.get("current_capital", 0.0))
         monthly_won = int(st.session_state.get("monthly_contribution", 0))
@@ -4221,17 +4402,27 @@ def run_streamlit_app():
             _n_months = len(median_path) - 1
 
             # ── VOO 기준선: 동일 조건, 종목만 VOO 100% ─────────────────────
+            _sim_start_rate = float(simulation_result.get("sim_start_rate", get_current_exchange_rate()))
+            _sim_mu_fx = float(simulation_result.get("sim_mu_fx", get_exchange_rate_params()[0]))
+            _sim_sigma_fx = float(simulation_result.get("sim_sigma_fx", get_exchange_rate_params()[1]))
             _voo_cache_key = str((
-                int(current_capital), monthly_won, recommended_mode, _n_months
+                "representative_path_v1",
+                int(current_capital),
+                monthly_won,
+                recommended_mode,
+                _n_months,
+                round(_sim_start_rate, 6),
+                round(_sim_mu_fx, 8),
+                round(_sim_sigma_fx, 8),
             ))
             _voo_median_raw = st.session_state.get("step5_voo_median")
             _voo_key_raw = st.session_state.get("step5_voo_cache_key")
 
             if _voo_median_raw is None or _voo_key_raw != _voo_cache_key:
                 try:
-                    _voo_start_rate = get_current_exchange_rate()
-                    _voo_mu_fx, _voo_sigma_fx = get_exchange_rate_params()
-                    _voo_mu, _voo_sigma = get_portfolio_params({"VOO": 1.0})
+                    _voo_annual_rate, _, _ = _get_portfolio_simulation_return({"VOO": 1.0})
+                    _voo_mu = np.log1p(max(_voo_annual_rate, -0.99)) / 252
+                    _, _voo_sigma = get_portfolio_params({"VOO": 1.0})
                     _voo_sim = run_simulation(
                         current_capital,
                         monthly_won,
@@ -4239,24 +4430,41 @@ def run_streamlit_app():
                         recommended_mode,
                         _voo_mu,
                         _voo_sigma,
-                        _voo_mu_fx,
-                        _voo_sigma_fx,
-                        _voo_start_rate,
+                        _sim_mu_fx,
+                        _sim_sigma_fx,
+                        _sim_start_rate,
                         n_simulations=100,
                     )
                     _voo_median = np.asarray(_voo_sim.get("median_path", []), dtype=float)
+                    _voo_paths = np.asarray(_voo_sim.get("paths", []), dtype=float)
                 except Exception:
                     _voo_median = np.array([])
+                    _voo_paths = np.array([])
                 st.session_state["step5_voo_median"] = _voo_median.tolist()
+                st.session_state["step5_voo_paths"] = _voo_paths.tolist()
                 st.session_state["step5_voo_cache_key"] = _voo_cache_key
             else:
                 _voo_median = np.asarray(_voo_median_raw, dtype=float)
+                _voo_paths = np.asarray(st.session_state.get("step5_voo_paths", []), dtype=float)
+
+            _representative_path, _selected_crashes, _target_crashes, _target_met = _select_representative_crash_path(
+                sim_paths,
+                median_path,
+                _n_months,
+                threshold=-0.10,
+            )
+            _voo_representative_path, _, _, _ = _select_representative_crash_path(
+                _voo_paths,
+                _voo_median,
+                _n_months,
+                threshold=-0.10,
+            )
 
             # 두 선을 동일한 길이로 맞춤 (STEP3 투자 기간 = _n_months + 1 포인트)
             _plot_len = _n_months + 1
-            _portfolio_plot = median_path[:_plot_len]
-            _voo_plot = _voo_median[:_plot_len] if len(_voo_median) >= _plot_len else (
-                _voo_median if len(_voo_median) > 0 else np.array([])
+            _portfolio_plot = _representative_path[:_plot_len]
+            _voo_plot = _voo_representative_path[:_plot_len] if len(_voo_representative_path) >= _plot_len else (
+                _voo_representative_path if len(_voo_representative_path) > 0 else np.array([])
             )
             _actual_len = min(len(_portfolio_plot), len(_voo_plot)) if len(_voo_plot) > 0 else len(_portfolio_plot)
             _portfolio_plot = _portfolio_plot[:_actual_len]
@@ -4265,10 +4473,10 @@ def run_streamlit_app():
             # 공통 X축 (두 선 동일 범위)
             _x_vals = [pd.Timestamp(start_date) + pd.DateOffset(months=i) for i in range(_actual_len)]
 
-            # ── 급락 구간 탐지: 전월 대비 -15% 이상 하락 ──────────────────
+            # ── 급락 구간 탐지: 전월 대비 -10% 이상 하락 ──────────────────
             _crash_months = [
                 i for i in range(1, len(_portfolio_plot))
-                if _portfolio_plot[i - 1] > 0 and _portfolio_plot[i] / _portfolio_plot[i - 1] < 0.85
+                if _portfolio_plot[i - 1] > 0 and _portfolio_plot[i] / _portfolio_plot[i - 1] < 0.90
             ]
 
             # ── Plotly 차트 ────────────────────────────────────────────────
@@ -4280,7 +4488,7 @@ def run_streamlit_app():
                     x=_x_vals,
                     y=_voo_plot,
                     mode="lines",
-                    name="S&P500 기준선 (VOO 100%)",
+                    name="S&P500 기준선 (VOO 대표 경로)",
                     line=dict(color="#9ca3af", width=2, dash="dash"),
                     hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
                 ))
@@ -4290,7 +4498,7 @@ def run_streamlit_app():
                 x=_x_vals,
                 y=_portfolio_plot,
                 mode="lines",
-                name="내 포트폴리오",
+                name="내 포트폴리오 (대표 경로)",
                 line=dict(color="#2563eb", width=3),
                 hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
             ))
@@ -4334,9 +4542,24 @@ def run_streamlit_app():
                 annotations=_annotations,
             )
             st.plotly_chart(fig, use_container_width=True)
+            if _target_met:
+                st.caption(
+                    f"표시된 파란 선은 Monte Carlo 100회 중 전월 대비 -10% 급락이 "
+                    f"{_target_crashes}회 이상 포함되고, 최종 자산이 중앙값에 가까운 대표 경로입니다."
+                )
+            else:
+                st.caption(
+                    f"표시된 파란 선은 Monte Carlo 100회 중 급락 횟수가 가장 많은 대표 경로입니다. "
+                    f"이번 결과에서는 목표 급락 횟수 {_target_crashes}회 중 {_selected_crashes}회가 감지되었습니다."
+                )
 
             # ── 급락 구간 설명 ─────────────────────────────────────────────
+            st.markdown("---")
             st.markdown("#### 급락 구간 설명")
+            st.info(
+                "📌 급락 구간: 전월 대비 10% 하락한 구간입니다.\n\n"
+                "여유자금이 있다면 더 투입하세요."
+            )
             if _crash_months:
                 _crash_lines = [
                     f"- {_x_vals[m].strftime('%Y년 %m월')}: "
@@ -4348,15 +4571,11 @@ def run_streamlit_app():
                     "급락 구간이 감지되었습니다.\n\n"
                     + "\n".join(_crash_lines)
                 )
-                st.info(
-                    "급락 구간은 내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 시점입니다. "
-                    "여유 현금이 있다면 해당 시점에 추가 투자를 고려할 수 있습니다."
-                )
             else:
-                st.info(
+                st.warning(
                     "급락 구간 없음\n\n"
-                    "이번 시뮬레이션에서는 전월 대비 15% 이상 하락 구간이 발생하지 않았습니다.\n\n"
-                    "기준: 내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 시점을 그래프에 표시합니다."
+                    "이번 시뮬레이션에서는 전월 대비 10% 이상 하락 구간이 발생하지 않았습니다.\n\n"
+                    "기준: 내 포트폴리오 대표 경로가 전월 대비 10% 이상 하락한 시점을 그래프에 표시합니다."
                 )
 
         cols = st.columns([2, 2, 1])
