@@ -46,6 +46,30 @@ def _agent_debug_log(run_id, hypothesis_id, location, message, data):
         pass
 # endregion
 
+# region agent log
+DEBUG_B8B036_LOG_PATH = "debug-b8b036.log"
+DEBUG_B8B036_SESSION_ID = "b8b036"
+
+
+def _debug_b8b036_log(run_id, hypothesis_id, location, message, data):
+    try:
+        payload = {
+            "sessionId": DEBUG_B8B036_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        line = json.dumps(payload, ensure_ascii=False)
+        print(f"[debug-b8b036] {line}", flush=True)
+        with open(DEBUG_B8B036_LOG_PATH, "a", encoding="utf-8") as debug_file:
+            debug_file.write(line + "\n")
+    except Exception:
+        pass
+# endregion
+
 # ============================================================
 # ETF 포트폴리오 시뮬레이션 - app.py
 # ============================================================
@@ -78,8 +102,11 @@ def load_etf_cagr():
     import yfinance as yf
     for ticker in ETF_DATA:
         try:
-            hist = yf.Ticker(ticker).history(period="max")
-            if len(hist) > 0:
+            etf = yf.Ticker(ticker)
+            hist = etf.history(period="10y", auto_adjust=True)
+            if hist is None or hist.empty or len(hist) < 252 * 3:
+                hist = etf.history(period="max", auto_adjust=True)
+            if hist is not None and len(hist) > 0:
                 start = hist['Close'].iloc[0]
                 end = hist['Close'].iloc[-1]
                 years = len(hist) / 252
@@ -885,10 +912,11 @@ HISTORICAL_RETURN_LABEL = "과거 연환산 수익률"
 SIMULATION_RETURN_LABEL = "시뮬레이션 가정 수익률"
 SOURCE_YAHOO_10Y = "Yahoo · 10년"
 SOURCE_YAHOO_INCEPTION = "Yahoo · 상장 후"
+SOURCE_YAHOO_10Y_FIRST = "Yahoo · 10년 우선"
 SOURCE_SIMULATION = "시뮬 가정"
 HISTORICAL_RETURN_DISCLAIMER = "과거 수익률은 미래 수익을 보장하지 않습니다."
 SIMULATION_RETURN_DISCLAIMER = (
-    "시뮬레이션 가정 수익률은 과거 연환산 수익률과 기준이 다를 수 있습니다."
+    "시뮬레이션 가정 수익률은 Yahoo 10년 CAGR을 우선 사용하며, 데이터가 부족하면 상장 후 CAGR을 사용합니다."
 )
 
 
@@ -899,14 +927,25 @@ def _get_etf_annual_return(ticker):
 
 
 def _calc_cagr_pct_from_hist(hist):
-    if hist is None or hist.empty:
+    if hist is None or hist.empty or "Close" not in hist:
         return None, None
-    first_close = float(hist["Close"].iloc[0])
-    last_close = float(hist["Close"].iloc[-1])
-    elapsed_years = max((hist.index[-1] - hist.index[0]).days / 365.25, 1e-6)
-    if first_close <= 0 or last_close <= 0 or elapsed_years <= 0:
+    close = hist["Close"].dropna()
+    if close.empty:
+        return None, None
+    first_close = float(close.iloc[0])
+    last_close = float(close.iloc[-1])
+    elapsed_years = max((close.index[-1] - close.index[0]).days / 365.25, 1e-6)
+    if (
+        not np.isfinite(first_close)
+        or not np.isfinite(last_close)
+        or first_close <= 0
+        or last_close <= 0
+        or elapsed_years <= 0
+    ):
         return None, None
     cagr_pct = ((last_close / first_close) ** (1 / elapsed_years) - 1) * 100
+    if not np.isfinite(cagr_pct):
+        return None, None
     return cagr_pct, elapsed_years
 
 
@@ -945,7 +984,7 @@ def _get_etf_historical_return_info(ticker):
 
 def _format_historical_return_value(hist_info):
     pct = (hist_info or {}).get("pct")
-    if pct is None:
+    if pct is None or not np.isfinite(float(pct)):
         return "-"
     return f"{pct:.1f}%"
 
@@ -959,11 +998,16 @@ def _format_historical_return_line(hist_info):
 
 
 def _get_etf_cagr_rate(ticker):
-    return float(ETF_DATA.get(ticker, {}).get("cagr", 0.10))
+    hist_info = _get_etf_historical_return_info(ticker)
+    pct = (hist_info or {}).get("pct")
+    if pct is not None and np.isfinite(float(pct)):
+        return float(pct) / 100
+    fallback_rate = float(ETF_DATA.get(ticker, {}).get("cagr", 0.10))
+    return fallback_rate if np.isfinite(fallback_rate) else 0.10
 
 
 def _get_portfolio_simulation_return(portfolio_weights):
-    """시뮬레이션용 포트폴리오 가정 수익률(CAGR 가중평균)."""
+    """시뮬레이션용 포트폴리오 가정 수익률(10년 우선 CAGR 가중평균)."""
     if not portfolio_weights:
         return 0.06, 6.0, SOURCE_SIMULATION
 
@@ -971,9 +1015,20 @@ def _get_portfolio_simulation_return(portfolio_weights):
         float(portfolio_weights.get(ticker, 0.0)) * _get_etf_cagr_rate(ticker)
         for ticker in portfolio_weights
     )
-    if rate <= 0:
+    sources = {
+        (_get_etf_historical_return_info(ticker) or {}).get("source")
+        for ticker in portfolio_weights
+        if (_get_etf_historical_return_info(ticker) or {}).get("source")
+    }
+    if not np.isfinite(rate) or rate <= 0:
         rate = 0.06
-    return float(rate), float(rate * 100), SOURCE_SIMULATION
+    if sources == {SOURCE_YAHOO_10Y}:
+        source = SOURCE_YAHOO_10Y
+    elif sources and sources <= {SOURCE_YAHOO_10Y, SOURCE_YAHOO_INCEPTION}:
+        source = SOURCE_YAHOO_10Y_FIRST
+    else:
+        source = SOURCE_SIMULATION
+    return float(rate), float(rate * 100), source
 
 
 def _format_simulation_return_line(rate_pct, source=SOURCE_SIMULATION):
@@ -1524,6 +1579,318 @@ SIMULATION_BASE_STATS = {
 DIVIDEND_TAX_RATE = 0.15
 DIVIDEND_YIELD_ESTIMATE = 0.02
 MONTE_CARLO_TRIALS = 1000
+
+
+def _get_leverage_multiplier(ticker):
+    if not ETF_DATA.get(ticker, {}).get("레버리지"):
+        return 1.0
+    if ticker in {"TQQQ", "UPRO", "SOXL"}:
+        return 3.0
+    if ticker in {"QLD", "SSO"}:
+        return 2.0
+    return 1.0
+
+
+def get_current_exchange_rate():
+    if yf is None:
+        return 1400.0
+    return float(yf.Ticker("USDKRW=X").fast_info["last_price"])
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def get_exchange_rate_params():
+    if yf is None:
+        return 0.0, 0.025
+
+    hist = yf.Ticker("USDKRW=X").history(period="10y", interval="1mo", auto_adjust=True)
+    if hist is None or hist.empty or "Close" not in hist:
+        return 0.0, 0.025
+
+    close = hist["Close"].dropna()
+    close = close[(close >= 500) & (close <= 3000)]
+    monthly_returns = close.pct_change().dropna()
+    monthly_returns = monthly_returns[np.isfinite(monthly_returns) & (monthly_returns.abs() < 0.5)]
+    if monthly_returns.empty:
+        return 0.0, 0.025
+
+    mu_fx = float(monthly_returns.mean())
+    sigma_fx = float(monthly_returns.std(ddof=1))
+    if not np.isfinite(mu_fx) or not np.isfinite(sigma_fx):
+        return 0.0, 0.025
+    return mu_fx, sigma_fx
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def get_portfolio_params(etf_weights):
+    if yf is None or not etf_weights:
+        return 0.0, 0.0
+
+    normalized_weights = _normalize_weights(etf_weights)
+    mu_portfolio = 0.0
+    sigma_portfolio = 0.0
+
+    for ticker, weight in normalized_weights.items():
+        try:
+            hist = yf.Ticker(ticker).history(period="max", auto_adjust=True)
+            if hist is None or hist.empty or "Close" not in hist:
+                continue
+
+            daily_returns = hist["Close"].dropna().pct_change().dropna()
+            if daily_returns.empty:
+                continue
+
+            mu_daily = float(daily_returns.mean())
+            sigma_daily = float(daily_returns.std(ddof=1))
+            if not np.isfinite(mu_daily) or not np.isfinite(sigma_daily):
+                continue
+
+            mu_portfolio += mu_daily * weight
+            sigma_portfolio += sigma_daily * weight
+        except Exception:
+            continue
+
+    return float(mu_portfolio), float(sigma_portfolio)
+
+
+@st.cache_data(ttl=60 * 60, show_spinner=False)
+def _get_live_usdkrw_rate():
+    if yf is None:
+        return 1400.0
+
+    for symbol in ("USDKRW=X", "KRW=X"):
+        try:
+            ticker = yf.Ticker(symbol)
+            fast_info = getattr(ticker, "fast_info", {}) or {}
+            rate = (
+                fast_info.get("lastPrice")
+                or fast_info.get("regularMarketPrice")
+                or fast_info.get("previousClose")
+            )
+            if rate is None:
+                hist = ticker.history(period="5d", auto_adjust=True)
+                if hist is not None and not hist.empty:
+                    rate = hist["Close"].dropna().iloc[-1]
+            if rate is not None and float(rate) > 0:
+                return float(rate)
+        except Exception:
+            continue
+
+    return 1400.0
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_usdkrw_monthly_stats():
+    if yf is None:
+        return 0.0, 0.025
+
+    for symbol in ("USDKRW=X", "KRW=X"):
+        try:
+            hist = yf.Ticker(symbol).history(period="10y", interval="1mo", auto_adjust=True)
+            if hist is None or hist.empty:
+                continue
+            monthly_returns = hist["Close"].dropna().pct_change().dropna()
+            if len(monthly_returns) >= 24:
+                return float(monthly_returns.mean()), float(monthly_returns.std(ddof=1))
+        except Exception:
+            continue
+
+    return 0.0, 0.025
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def _get_voo_daily_stats_since_2008():
+    if yf is None:
+        return 0.08, 0.16
+
+    try:
+        hist = yf.Ticker("VOO").history(start="2008-01-01", auto_adjust=True)
+        if hist is None or hist.empty or len(hist) < 252:
+            hist = yf.Ticker("VOO").history(period="max", auto_adjust=True)
+        daily_returns = hist["Close"].dropna().pct_change().dropna()
+        if len(daily_returns) < 252:
+            return 0.08, 0.16
+        annual_mu = float(daily_returns.mean() * 252)
+        annual_sigma = float(daily_returns.std(ddof=1) * np.sqrt(252))
+        return annual_mu, annual_sigma
+    except Exception:
+        return 0.08, 0.16
+
+
+def _get_portfolio_voo_based_stats(etf_weights):
+    normalized_weights = _normalize_weights(etf_weights)
+    base_mu, base_sigma = _get_voo_daily_stats_since_2008()
+
+    portfolio_mu = 0.0
+    portfolio_sigma = 0.0
+    for ticker, weight in normalized_weights.items():
+        leverage = _get_leverage_multiplier(ticker)
+        expense_ratio = ETF_DATA.get(ticker, {}).get("보수율", 0.0)
+        portfolio_mu += weight * (base_mu - expense_ratio)
+        portfolio_sigma += weight * base_sigma * leverage
+
+    return portfolio_mu, portfolio_sigma, normalized_weights
+
+
+def _get_weighted_dividend_yield(etf_weights):
+    normalized_weights = _normalize_weights(etf_weights)
+    weighted_yield = 0.0
+    for ticker, weight in normalized_weights.items():
+        dividend_yield = _get_etf_dividend_yield(ticker)
+        if dividend_yield is None:
+            dividend_yield = DIVIDEND_YIELD_ESTIMATE if ETF_DATA.get(ticker, {}).get("배당") else 0.0
+        weighted_yield += weight * max(float(dividend_yield), 0.0)
+    return weighted_yield
+
+
+@st.cache_data(ttl=60 * 60, show_spinner=False)
+def run_simulation(
+    initial_capital,
+    monthly_contribution,
+    years,
+    investment_method,
+    mu_portfolio,
+    sigma_portfolio,
+    mu_fx,
+    sigma_fx,
+    start_rate,
+    n_simulations=100,
+):
+    """일별 ETF 수익률과 월별 환율 변동을 반영한 Monte Carlo 경로를 반환합니다."""
+    months = max(int(round(float(years) * 12)), 0)
+    n_simulations = max(int(n_simulations), 1)
+    initial_capital = max(float(initial_capital), 0.0)
+    monthly_contribution = max(float(monthly_contribution), 0.0)
+    mu_portfolio = float(mu_portfolio)
+    sigma_portfolio = max(float(sigma_portfolio), 0.0)
+    mu_fx = float(mu_fx)
+    sigma_fx = max(float(sigma_fx), 0.0)
+    start_rate = max(float(start_rate), 1e-6)
+    trading_days_per_month = 21
+
+    # region agent log
+    _debug_b8b036_log(
+        "initial",
+        "H1,H2,H3,H5",
+        "app.py:run_simulation:entry",
+        "run_simulation normalized inputs",
+        {
+            "initial_capital": initial_capital,
+            "monthly_contribution": monthly_contribution,
+            "years": years,
+            "months": months,
+            "investment_method": investment_method,
+            "mu_portfolio_daily": mu_portfolio,
+            "sigma_portfolio_daily": sigma_portfolio,
+            "mu_fx_monthly": mu_fx,
+            "sigma_fx_monthly": sigma_fx,
+            "start_rate": start_rate,
+            "n_simulations": n_simulations,
+        },
+    )
+    # endregion
+
+    # 두 값이 모두 제공된 경우 investment_method와 무관하게 혼합형으로 동작
+    if initial_capital > 0 and monthly_contribution > 0:
+        invest_initial = initial_capital
+        invest_monthly = monthly_contribution
+    elif investment_method in {"거치식", "거치형", "lump_sum"}:
+        invest_initial = initial_capital
+        invest_monthly = 0.0
+    elif investment_method in {"적립식", "적립형", "dca"}:
+        invest_initial = 0.0
+        invest_monthly = monthly_contribution
+    elif investment_method in {"혼합식", "혼합형", "mixed"}:
+        invest_initial = initial_capital
+        invest_monthly = monthly_contribution
+    else:
+        raise ValueError("investment_method는 '거치식', '적립식', '혼합식' 중 하나여야 합니다.")
+
+    print(
+        f"[run_simulation] method={investment_method!r} → "
+        f"invest_initial={invest_initial:,.0f}원  invest_monthly={invest_monthly:,.0f}원",
+        flush=True,
+    )
+
+    paths = np.zeros((n_simulations, months + 1), dtype=float)
+
+    for sim_idx in range(n_simulations):
+        exchange_rate = start_rate
+        usd_value = invest_initial / start_rate
+        paths[sim_idx, 0] = usd_value * exchange_rate
+
+        for month in range(1, months + 1):
+            fx_return = np.random.normal(mu_fx, sigma_fx)
+            exchange_rate = max(exchange_rate * (1 + fx_return), 1e-6)
+
+            if invest_monthly > 0:
+                usd_value += invest_monthly / exchange_rate
+
+            daily_returns = np.maximum(
+                np.random.normal(mu_portfolio, sigma_portfolio, trading_days_per_month),
+                -0.99,
+            )
+            usd_value *= np.prod(1 + daily_returns)
+            paths[sim_idx, month] = usd_value * exchange_rate
+
+            if sim_idx == 0 and month <= 12:
+                print(
+                    f"[run_simulation] sim=0 month={month:>2}  "
+                    f"exchange_rate={exchange_rate:,.1f}  "
+                    f"invest_monthly={invest_monthly:,.0f}원  "
+                    f"usd_value={usd_value:.4f}$  "
+                    f"won_value={paths[sim_idx, month]:>16,.0f}원",
+                    flush=True,
+                )
+
+            if sim_idx == 0 and month <= 2:
+                # region agent log
+                _debug_b8b036_log(
+                    "initial",
+                    "H1,H2,H3,H5",
+                    "app.py:run_simulation:first_path_month",
+                    "first simulation monthly state",
+                    {
+                        "month": month,
+                        "fx_return": float(fx_return),
+                        "exchange_rate": float(exchange_rate),
+                        "invest_monthly": float(invest_monthly),
+                        "usd_value_after_return": float(usd_value),
+                        "month_daily_return_min": float(np.min(daily_returns)),
+                        "month_daily_return_max": float(np.max(daily_returns)),
+                        "month_daily_return_mean": float(np.mean(daily_returns)),
+                        "month_growth_factor": float(np.prod(1 + daily_returns)),
+                        "won_path_value": float(paths[sim_idx, month]),
+                    },
+                )
+                # endregion
+
+    median_path = np.percentile(paths, 50, axis=0)
+    upper_path = np.percentile(paths, 90, axis=0)
+    lower_path = np.percentile(paths, 10, axis=0)
+
+    # region agent log
+    _debug_b8b036_log(
+        "initial",
+        "H2,H3,H4,H5",
+        "app.py:run_simulation:exit",
+        "run_simulation output summary",
+        {
+            "median_first_values": [float(v) for v in median_path[: min(5, len(median_path))]],
+            "upper_first_values": [float(v) for v in upper_path[: min(5, len(upper_path))]],
+            "lower_first_values": [float(v) for v in lower_path[: min(5, len(lower_path))]],
+            "paths_shape": list(paths.shape),
+            "paths_min": float(np.min(paths)) if paths.size else None,
+            "paths_max": float(np.max(paths)) if paths.size else None,
+        },
+    )
+    # endregion
+
+    return {
+        "paths": paths.tolist(),
+        "median_path": median_path.tolist(),
+        "upper_path": upper_path.tolist(),
+        "lower_path": lower_path.tolist(),
+    }
 
 
 def _get_ticker_return_profile(ticker):
@@ -2201,7 +2568,6 @@ def _sync_unified_sim_period_end_from_years(years_value):
         "unified_sim_period_start",
         st.session_state.get("invest_period_start", date.today()),
     )
-    st.session_state["unified_sim_period_start"] = start_date
     st.session_state["unified_sim_period_end"] = add_calendar_years(
         start_date,
         max(1, int(np.ceil(float(years_value)))),
@@ -2602,6 +2968,7 @@ def run_streamlit_app():
         st.session_state["invest_period_end"] = add_calendar_years(date.today(), 10)
         st.session_state["sim_mode"] = INVESTMENT_MODES[1]
         st.session_state["simulation_results"] = None
+        st.session_state["simulation_result"] = None
 
     step_labels = {
         1: "STEP1: AI 성향 분석",
@@ -3142,46 +3509,27 @@ def run_streamlit_app():
             if st.button("STEP2로 이동", key="goto2c"):
                 move_step(2)
             return
+        simulation_result = st.session_state.get("simulation_result")
+        if not simulation_result:
+            st.warning("STEP3에서 분석 시작 버튼을 눌러 시뮬레이션을 먼저 실행해 주세요.")
+            if st.button("STEP3로 이동", key="goto3c"):
+                move_step(3)
+            return
 
-        st.markdown("## 📋 종합 투자 전략 보고서")
-        st.markdown("**STEP 1~3 분석 결과를 바탕으로 한 맞춤형 투자 전략입니다.**")
-        st.markdown("---")
-
-        # ===== 섹션 1: 투자 성향 분석 요약 =====
-        st.markdown("### 📊 1. 투자 성향 분석 결과")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        for col, category in zip([col1, col2, col3, col4], AI_PROFILE_CATEGORIES):
-            pct = profile_weights.get(category, 0)
-            col.metric(category, f"{pct:.0f}%")
-        
-        top_categories = sorted(
-            [(cat, profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        top_cat = top_categories[0][0]
-        top_pct = top_categories[0][1]
-        
-        description = ""
-        if top_cat == "지수추적":
-            description = "📈 시장 지수를 따라가며 안정적인 장기 수익을 추구하는 성향입니다."
-        elif top_cat == "배당성장":
-            description = "💰 정기적인 배당 수익을 통해 안정적인 현금흐름을 원하는 성향입니다."
-        elif top_cat == "배당집중":
-            description = "📅 월배당·프리미엄 수익을 통해 규칙적인 추가 수익을 기대하는 성향입니다."
-        elif top_cat == "레버리지":
-            description = "🚀 높은 수익을 추구하되 높은 변동성을 감수할 수 있는 공격적 성향입니다."
-        
-        st.write(f"**최상위 성향:** {top_cat} ({top_pct:.0f}%)")
-        st.write(description)
-
-        st.markdown("---")
-
-        # ===== 섹션 2: 선택된 포트폴리오 =====
-        st.markdown("### 🎯 2. 추천 포트폴리오 구성")
-        
+        # ── 공통 데이터 ──────────────────────────────────────────────────────
+        median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
+        target_won = int(st.session_state.get("target_amount", 0))
+        current_capital = float(st.session_state.get("current_capital", 0.0))
+        monthly_won = int(st.session_state.get("monthly_contribution", 0))
+        selected_mode = st.session_state.get("analysis_mode")
         etf_weights = st.session_state.get("etf_weights", {})
+        achievement_prob = float(simulation_result.get("achievement_prob", 0.0))
+
+        try:
+            portfolio_weights = build_portfolio_weights(selected_etfs, etf_weights)
+        except Exception:
+            portfolio_weights = {t: 1.0 / max(1, len(selected_etfs)) for t in selected_etfs}
+
         def fmt_money(n):
             try:
                 f = float(n)
@@ -3191,169 +3539,185 @@ def run_streamlit_app():
                 return f"{int(f):,}"
             s = f"{f:,}"
             if "." in s:
-                s = s.rstrip('0').rstrip('.')
+                s = s.rstrip("0").rstrip(".")
             return s
-        
+
+        # 참조 환율 (시뮬레이션 시작 기준 / 배당 환전용)
+        try:
+            ref_exchange_rate = get_current_exchange_rate()
+        except Exception:
+            ref_exchange_rate = 1400.0
+
+        st.markdown("## 📋 종합 투자 전략 보고서")
+        st.markdown("**STEP 1~3 분석 결과를 바탕으로 한 맞춤형 투자 전략입니다.**")
+        st.markdown("---")
+
+        # ===== 섹션 1: 투자 성향 분석 결과 =====
+        st.markdown("### 📊 1. 투자 성향 분석 결과")
+
+        col1, col2, col3, col4 = st.columns(4)
+        for col, category in zip([col1, col2, col3, col4], AI_PROFILE_CATEGORIES):
+            pct = profile_weights.get(category, 0)
+            col.metric(category, f"{pct:.0f}%")
+
+        top_categories = sorted(
+            [(cat, profile_weights.get(cat, 0)) for cat in AI_PROFILE_CATEGORIES],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        top_cat = top_categories[0][0]
+        top_pct = top_categories[0][1]
+
+        _desc_map = {
+            "지수추적": "📈 시장 지수를 따라가며 안정적인 장기 수익을 추구하는 성향입니다.",
+            "배당성장": "💰 정기적인 배당 수익을 통해 안정적인 현금흐름을 원하는 성향입니다.",
+            "배당집중": "📅 월배당·프리미엄 수익을 통해 규칙적인 추가 수익을 기대하는 성향입니다.",
+            "레버리지": "🚀 높은 수익을 추구하되 높은 변동성을 감수할 수 있는 공격적 성향입니다.",
+        }
+        st.write(f"**최상위 성향:** {top_cat} ({top_pct:.0f}%)")
+        st.write(_desc_map.get(top_cat, ""))
+
+        st.markdown("---")
+
+        # ===== 섹션 2: 추천 포트폴리오 구성 =====
+        st.markdown("### 🎯 2. 추천 포트폴리오 구성")
+
         portfolio_data = []
         for idx, ticker in enumerate(selected_etfs, 1):
             info = ETF_DATA.get(ticker, {})
-            weight = etf_weights.get(ticker, 1/len(selected_etfs))
-            weight_pct = round(weight * 100, 1)
+            weight = etf_weights.get(ticker, 1 / len(selected_etfs))
             portfolio_data.append({
                 "순위": idx,
                 "ETF": ticker,
                 "이름": info.get("이름", "")[:35],
                 "카테고리": info.get("카테고리", ""),
-                "비중": f"{weight_pct}%"
+                "비중": f"{round(weight * 100, 1)}%",
             })
-        
+
         portfolio_df = pd.DataFrame(portfolio_data)
         st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
-        
-        try:
-            portfolio_weights = build_portfolio_weights(selected_etfs, etf_weights)
-        except Exception:
-            portfolio_weights = {t: 1.0 / max(1, len(selected_etfs)) for t in selected_etfs}
-        
-        portfolio_avg_return, portfolio_avg_return_pct, sim_source = _get_portfolio_simulation_return(
-            portfolio_weights
-        )
-        
+
         leverage_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("레버리지", False))
         dividend_count = sum(1 for t in selected_etfs if ETF_DATA.get(t, {}).get("배당", False))
-        
-        st.write(f"• **{_format_simulation_return_line(portfolio_avg_return_pct, sim_source)}**")
-        st.caption(SIMULATION_RETURN_DISCLAIMER)
+
+        st.write("• **STEP3 Monte Carlo 시뮬레이션 결과 사용**")
         st.write(f"• **배당 ETF 포함:** {dividend_count}개")
         st.write(f"• **레버리지 ETF 포함:** {leverage_count}개")
 
         st.markdown("---")
 
-        # ===== 섹션 3: 투자 목표 및 계획 =====
+        # ===== 섹션 3: 투자 목표 및 시나리오 =====
         st.markdown("### 🎲 3. 투자 목표 및 시나리오")
-        
-        target_won = int(st.session_state.get("target_amount", 0))
-        current_capital = float(st.session_state.get("current_capital", 0.0))
-        monthly_won = int(st.session_state.get("monthly_contribution", 0))
-        selected_mode = st.session_state.get("analysis_mode")
-        dividend_report_months = int(float(st.session_state.get("years", st.session_state.get("target_years", 10))) * 12)
-        
-        goal_col1, goal_col2 = st.columns(2)
+
+        # 포트폴리오 예상 연 수익률 (일별 μ → 연환산)
+        try:
+            _mu_daily, _ = get_portfolio_params(portfolio_weights)
+            _annual_return_pct = ((1 + _mu_daily) ** 252 - 1) * 100
+        except Exception:
+            _annual_return_pct = None
+
+        goal_col1, goal_col2, goal_col3, goal_col4 = st.columns(4)
         with goal_col1:
             st.metric("현재 보유 자금", f"{fmt_money(int(current_capital))}원")
         with goal_col2:
             st.metric("목표 금액", f"{fmt_money(target_won)}원")
-        
+        with goal_col3:
+            st.metric("시작 환율", f"{ref_exchange_rate:,.0f}원/달러")
+        with goal_col4:
+            if _annual_return_pct is not None:
+                st.metric("포트폴리오 예상 연 수익률", f"{_annual_return_pct:.1f}%")
+            else:
+                st.metric("포트폴리오 예상 연 수익률", "산출 불가")
+
         st.write(f"**분석 모드:** {selected_mode}")
-        
+
+        # dividend_report_months: 배당 계산에 사용할 기간
+        dividend_report_months = int(float(st.session_state.get("years", st.session_state.get("target_years", 10))) * 12)
+
         if selected_mode == "목표 금액 달성":
-            required_years = estimate_years_to_target(
-                target_won,
-                monthly_won,
-                current_capital,
-                avg_return=portfolio_avg_return,
-            )
-            
             st.write(f"• **월 적립 계획:** {fmt_money(monthly_won)}원")
-            
-            if current_capital >= target_won:
-                st.success("✅ 현재 보유 자금만으로도 목표 달성 완료!")
-                dividend_report_months = 0
-            elif monthly_won <= 0:
-                st.warning("⚠️ 월 적립금이 0입니다. 목표 달성에 필요한 월 적립금을 설정해 주세요.")
-            elif not np.isfinite(required_years) or required_years == float("inf"):
-                st.warning("⚠️ 현재 설정으로는 목표 달성이 어렵습니다.")
+            target_months_stored = simulation_result.get("target_months")
+            if target_months_stored is None:
+                st.warning("⚠️ 중앙값 기준으로는 시뮬레이션 기간 내 목표 금액에 도달하지 못했습니다.")
+                dividend_report_months = max(0, len(median_path) - 1)
             else:
-                total_months = int(round(required_years * 12))
-                dividend_report_months = total_months
-                years_calc = total_months // 12
-                months_remain = total_months % 12
-                st.write(f"• **예상 달성 기간:** {years_calc}년 {months_remain}개월")
-                
+                _tm = int(target_months_stored)
+                dividend_report_months = _tm
+                st.write(f"• **예상 달성 기간:** {_tm // 12}년 {_tm % 12}개월")
+                st.write(f"• **목표 달성 확률:** {achievement_prob:.1f}%")
+
         elif selected_mode == "목표 기간 확인":
-            target_years_val = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
-            start_date = st.session_state.get("sim_period_mode3_start", st.session_state.get("invest_period_start", date.today()))
-            end_date = st.session_state.get("sim_period_mode3_end", st.session_state.get("invest_period_end"))
-            
-            st.write(f"• **투자 기간:** {format_period_label(start_date, end_date)}")
-            
-            months = int(target_years_val * 12)
-            dividend_report_months = months
-            monthly_r = portfolio_avg_return / 12
-            future_current_capital = current_capital * np.power(1 + monthly_r, months)
-            
-            if future_current_capital >= target_won:
-                st.success("✅ 현재 보유 자금만으로도 목표 달성 가능!")
-            else:
-                required_monthly = estimate_required_contribution(
-                    target_won,
-                    target_years_val,
-                    current_capital,
-                    avg_return=portfolio_avg_return,
-                )
-                if not np.isfinite(required_monthly):
-                    required_monthly_int = 0
+            dividend_report_months = max(0, len(median_path) - 1)
+            if len(median_path):
+                _final_median_val = float(median_path[-1])
+                _eok = int(_final_median_val) // 100_000_000
+                _man = (int(_final_median_val) % 100_000_000) // 10_000
+                if _eok > 0 and _man > 0:
+                    _amt = f"{_eok}억 {_man:,}만원"
+                elif _eok > 0:
+                    _amt = f"{_eok}억원"
                 else:
-                    required_monthly_int = int(np.ceil(required_monthly))
-                st.write(f"• **필요 월 적립금:** {fmt_money(required_monthly_int)}원")
+                    _amt = f"{_man:,}만원"
+                st.write(f"• **예상 달성 금액:** {_amt}")
+                st.write(f"• **달성 확률:** {achievement_prob:.1f}%")
+                if target_won > 0 and _final_median_val >= target_won:
+                    st.success("✅ 중앙값 기준으로 목표 금액 달성이 가능합니다.")
 
         st.markdown("---")
 
-        # ===== 투자기간 후 월 배당금 카드 =====
-        st.markdown("### 💵 투자기간 후 월 배당금 예상")
+        # ===== 섹션 4: 투자기간 후 월 배당금 예상 =====
+        st.markdown("### 💵 4. 투자기간 후 월 배당금 예상")
 
         MONTHLY_DIVIDEND_ETFS = {"JEPI", "JEPQ", "QYLD"}
         dividend_yields = {
-            ticker: dividend_yield
+            ticker: dy
             for ticker in selected_etfs
-            if (dividend_yield := _get_etf_dividend_yield(ticker)) is not None and dividend_yield >= 0.01
+            if (dy := _get_etf_dividend_yield(ticker)) is not None and dy >= 0.01
         }
 
         if not dividend_yields:
             st.info("배당수익률 1% 이상 ETF가 없어 월 배당금 예상치를 표시하지 않습니다.")
         else:
-            total_months = max(0, int(dividend_report_months))
-            monthly_r = portfolio_avg_return / 12
-            buy_mode = _recommended_investment_mode_from_profile()
-            base_value = 0.0 if buy_mode == "적립형" else current_capital
-            monthly_add = monthly_won if buy_mode in {"적립형", "혼합형"} else 0
+            _dm = min(max(0, int(dividend_report_months)), max(0, len(median_path) - 1))
 
-            projected_value = base_value
-            cumulative_dividend = 0
-            final_monthly_total = 0
-            final_dividend_asset_value = 0
-            for month in range(total_months + 1):
-                monthly_total = 0
-                dividend_asset_value = 0
-                for ticker, dividend_yield in dividend_yields.items():
-                    etf_asset_won = projected_value * portfolio_weights.get(ticker, 0)
-                    dividend_asset_value += etf_asset_won
-                    annual_dividend_won = etf_asset_won * dividend_yield
-                    if ticker in MONTHLY_DIVIDEND_ETFS:
-                        monthly_dividend_won = annual_dividend_won / 12
-                    else:
-                        monthly_dividend_won = (annual_dividend_won / 4) / 3
-                    monthly_total += monthly_dividend_won
-                final_monthly_total = monthly_total
-                final_dividend_asset_value = dividend_asset_value
-                if month < total_months:
-                    cumulative_dividend += monthly_total
-                    projected_value *= (1 + monthly_r)
-                    projected_value += monthly_add
+            # 배당금은 달러로 누적 (재투자 없음), 종료 시점 환율로 원화 환전
+            _cumulative_div_usd = 0.0
+            _final_monthly_div_usd = 0.0
+            _final_div_asset_won = 0.0
 
-            dividend_weight_sum = sum(portfolio_weights.get(ticker, 0) for ticker in dividend_yields)
-            dividend_invested_amount = (base_value + monthly_add * total_months) * dividend_weight_sum
-            dividend_return_pct = (
-                ((final_dividend_asset_value + cumulative_dividend) / dividend_invested_amount - 1) * 100
-                if dividend_invested_amount > 0
-                else 0
+            for _month in range(_dm + 1):
+                _won_val = float(median_path[_month]) if _month < len(median_path) else float(median_path[-1])
+                _month_div_usd = 0.0
+                _month_asset_won = 0.0
+                for _ticker, _dy in dividend_yields.items():
+                    _etf_won = _won_val * portfolio_weights.get(_ticker, 0)
+                    _etf_usd = _etf_won / ref_exchange_rate
+                    _ann_div_usd = _etf_usd * _dy
+                    _mon_div_usd = _ann_div_usd / 12 if _ticker in MONTHLY_DIVIDEND_ETFS else (_ann_div_usd / 4) / 3
+                    _month_div_usd += _mon_div_usd
+                    _month_asset_won += _etf_won
+                if _month == _dm:
+                    _final_monthly_div_usd = _month_div_usd
+                    _final_div_asset_won = _month_asset_won
+                if _month < _dm:
+                    _cumulative_div_usd += _month_div_usd
+
+            # 마지막 환율 기준 원화 환전
+            _monthly_div_won = int(round(_final_monthly_div_usd * ref_exchange_rate))
+            _final_div_asset_won_int = int(round(_final_div_asset_won))
+            _cumulative_div_won = int(round(_cumulative_div_usd * ref_exchange_rate))
+
+            _div_weight_sum = sum(portfolio_weights.get(t, 0) for t in dividend_yields)
+            _invested_won = (current_capital + monthly_won * _dm) * _div_weight_sum
+            _div_return_pct = (
+                ((_final_div_asset_won + _cumulative_div_usd * ref_exchange_rate) / _invested_won - 1) * 100
+                if _invested_won > 0
+                else 0.0
             )
-            report_years = total_months // 12
-            report_months = total_months % 12
-            period_label = f"{report_years}년 후" if report_months == 0 else f"{report_years}년 {report_months}개월 후"
-            monthly_dividend_won = int(round(final_monthly_total))
-            final_dividend_asset_won = int(round(final_dividend_asset_value))
-            cumulative_dividend_won = int(round(cumulative_dividend))
+
+            _rep_y = _dm // 12
+            _rep_m = _dm % 12
+            _period_lbl = f"{_rep_y}년 후" if _rep_m == 0 else f"{_rep_y}년 {_rep_m}개월 후"
 
             st.markdown(
                 f"""
@@ -3364,13 +3728,13 @@ def run_streamlit_app():
                     color:white;
                     box-shadow:0 8px 20px rgba(0,0,0,0.12);
                 ">
-                    <div style="font-size:1.05rem;font-weight:700;margin-bottom:8px;opacity:0.95;">💸 {period_label} 매달 받는 배당금</div>
-                    <div style="font-size:3.2rem;font-weight:900;line-height:1.05;letter-spacing:-1px;">{monthly_dividend_won:,}원</div>
-                    <div style="font-size:0.9rem;margin-top:8px;opacity:0.78;">배당금은 세전 기준입니다.</div>
+                    <div style="font-size:1.05rem;font-weight:700;margin-bottom:8px;opacity:0.95;">💸 {_period_lbl} 매달 받는 배당금</div>
+                    <div style="font-size:3.2rem;font-weight:900;line-height:1.05;letter-spacing:-1px;">{_monthly_div_won:,}원</div>
+                    <div style="font-size:0.9rem;margin-top:8px;opacity:0.78;">배당금은 세전 기준 · 달러 누적 후 환율 {ref_exchange_rate:,.0f}원/$ 기준 환전</div>
                     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:26px;">
-                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💼 배당 ETF 총 자산 {final_dividend_asset_won:,}원</div>
-                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">↗ 배당 ETF 수익률 {dividend_return_pct:,.1f}%</div>
-                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💸 총 배당 {cumulative_dividend_won:,}원</div>
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💼 배당 ETF 총 자산 {_final_div_asset_won_int:,}원</div>
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">↗ 배당 ETF 수익률 {_div_return_pct:,.1f}%</div>
+                        <div style="background:rgba(255,255,255,0.16);border-radius:999px;padding:8px 14px;font-weight:700;">💸 총 배당 {_cumulative_div_won:,}원</div>
                     </div>
                 </div>
                 """,
@@ -3379,38 +3743,57 @@ def run_streamlit_app():
 
         st.markdown("---")
 
-        # ===== 섹션 4: AI 성향 분석 결과 =====
-        st.markdown("### 💡 4. AI 성향 분석 결과")
+        # ===== 섹션 5: AI 성향 분석 결과 =====
+        st.markdown("### 💡 5. AI 성향 분석 결과")
 
-        investment_method = _recommended_investment_mode_from_profile().replace("형", "식")
-        analysis_years = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
-        selected_etfs_for_prompt = [
-            {
-                "ETF": ticker,
-                "비중": f"{portfolio_weights.get(ticker, 0) * 100:.1f}%",
-            }
-            for ticker in selected_etfs
+        _investment_method = _recommended_investment_mode_from_profile().replace("형", "식")
+        _analysis_years = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+        _etfs_for_prompt = [
+            {"ETF": t, "비중": f"{portfolio_weights.get(t, 0) * 100:.1f}%"}
+            for t in selected_etfs
         ]
 
-        try:
-            with st.spinner("AI 분석 중입니다. 잠시만 기다려 주세요..."):
-                ai_analysis = _generate_gemini_step4_analysis(
-                    profile_weights,
-                    selected_etfs_for_prompt,
-                    investment_method,
-                    target_won,
-                    analysis_years,
-                )
-        except Exception:
-            ai_analysis = _default_step4_analysis_text(
-                profile_weights,
-                selected_etfs,
-                investment_method,
-                target_won,
-                analysis_years,
-            )
+        # session_state 캐시 — 입력이 바뀌지 않으면 Gemini를 재호출하지 않음
+        _ai_cache_key = str((
+            sorted(profile_weights.items()),
+            sorted(etf_weights.items()),
+            _investment_method,
+            target_won,
+            int(_analysis_years),
+            selected_mode,
+        ))
+        _cached = st.session_state.get("step4_ai_analysis")
+        _cached_key = st.session_state.get("step4_ai_cache_key")
 
-        st.info(ai_analysis)
+        if _cached is None or _cached_key != _ai_cache_key:
+            try:
+                with st.spinner("AI 분석 중입니다. 잠시만 기다려 주세요..."):
+                    _ai_text = _generate_gemini_step4_analysis(
+                        profile_weights,
+                        _etfs_for_prompt,
+                        _investment_method,
+                        target_won,
+                        _analysis_years,
+                    )
+            except Exception:
+                _ai_text = _default_step4_analysis_text(
+                    profile_weights,
+                    selected_etfs,
+                    _investment_method,
+                    target_won,
+                    _analysis_years,
+                )
+            st.session_state["step4_ai_analysis"] = _ai_text
+            st.session_state["step4_ai_cache_key"] = _ai_cache_key
+        else:
+            _ai_text = _cached
+
+        st.info(_ai_text)
+
+        if st.button("🔄 AI 분석 다시 생성", key="regen_ai_step4"):
+            st.session_state.pop("step4_ai_analysis", None)
+            st.session_state.pop("step4_ai_cache_key", None)
+            st.rerun()
 
         st.markdown("---")
 
@@ -3442,9 +3825,6 @@ def run_streamlit_app():
         step3_selected_etfs = st.session_state.get("selected_etfs", [])
         step3_etf_weights = st.session_state.get("etf_weights", {})
         step3_portfolio_weights = build_portfolio_weights(step3_selected_etfs, step3_etf_weights) if step3_selected_etfs else {}
-        step3_avg_return, step3_avg_return_pct, step3_sim_source = _get_portfolio_simulation_return(
-            step3_portfolio_weights
-        )
 
         # ===== 분석 모드 선택 =====
         st.markdown("#### 🎯 1단계: 분석 모드 선택")
@@ -3509,6 +3889,7 @@ def run_streamlit_app():
             )
             if st.button("목표 금액 달성 선택", use_container_width=True, key="select_target_amount_mode"):
                 selected_analysis_mode = "목표 금액 달성"
+                st.session_state["simulation_result"] = None
 
         with mode_col2:
             selected_class = " selected" if selected_analysis_mode == "목표 기간 확인" else ""
@@ -3526,6 +3907,7 @@ def run_streamlit_app():
             )
             if st.button("목표 기간 확인 선택", use_container_width=True, key="select_target_period_mode"):
                 selected_analysis_mode = "목표 기간 확인"
+                st.session_state["simulation_result"] = None
 
         st.session_state["analysis_mode"] = selected_analysis_mode
 
@@ -3587,10 +3969,7 @@ def run_streamlit_app():
         
         # ===== 분석 결과 표시 =====
         st.markdown("#### 📈 3단계: 분석 결과")
-        st.caption(
-            f"{_format_simulation_return_line(step3_avg_return_pct, step3_sim_source)} · "
-            f"{SIMULATION_RETURN_DISCLAIMER}"
-        )
+        st.caption("분석 시작 버튼을 누르면 환율과 ETF 일별 변동성을 반영한 Monte Carlo 시뮬레이션을 실행합니다.")
         
         # 기본 정보 표시
         if selected_analysis_mode == "목표 금액 달성":
@@ -3612,89 +3991,175 @@ def run_streamlit_app():
 
         st.markdown("")
         
-        # 선택한 모드에 따라 분석
         if selected_analysis_mode == "목표 금액 달성":
-            st.markdown("**📍 분석 모드: 목표 금액 달성**")
-            st.write("월 적립금을 고정하고, 목표 금액 달성까지 걸리는 기간을 계산합니다.")
-            
-            required_years = estimate_years_to_target(
-                target_won,
-                monthly_won,
-                current_capital,
-                avg_return=step3_avg_return,
-            )
-            
+            target_years_val = 100.0
             st.session_state["target_amount"] = target_won
-            st.session_state["monthly_contribution"] = monthly_won
-            st.session_state["current_capital"] = current_capital
-            
-            if current_capital >= target_won:
-                st.success("✅ 현재 보유 자금만으로도 목표 달성 완료!")
-            elif monthly_won <= 0:
-                st.warning("⚠️ 월 적립금이 0입니다.")
-            elif not np.isfinite(required_years) or required_years == float("inf"):
-                st.warning("⚠️ 현재 설정으로는 목표 달성이 어렵습니다. 월 적립금을 증가시켜 주세요.")
-            else:
-                total_months = int(round(required_years * 12))
-                years_calc = total_months // 12
-                months_remain = total_months % 12
-                
-                st.session_state["years"] = total_months / 12.0
-                _sync_unified_sim_period_end_from_years(st.session_state["years"])
-                
-                st.markdown(
-                    f"""
-                    <div style="
-                        background:linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-                        border-radius:12px;
-                        padding:24px;
-                        text-align:center;
-                        color:white;
-                    ">
-                        <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">📅 예상 달성 기간</div>
-                        <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{years_calc}년 {months_remain}개월</div>
-                        <div style="font-size:0.9rem;opacity:0.85;">시뮬레이션 가정 {step3_avg_return_pct:.2f}% 기준 (출처: {step3_sim_source})</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        
-        elif selected_analysis_mode == "목표 기간 확인":
-            st.markdown("**📍 분석 모드: 목표 기간 확인**")
-            st.write("투자 기간을 고정하고, 해당 기간 후 달성 가능한 금액을 계산합니다.")
-            
+        else:
+            target_won = int(st.session_state.get("target_amount", 0))
+
+        if st.button("분석 시작", use_container_width=True, key="start_step3_simulation"):
             st.session_state["monthly_contribution"] = monthly_won
             st.session_state["current_capital"] = current_capital
             st.session_state["target_years"] = target_years_val
             st.session_state["years"] = target_years_val
-            _sync_unified_sim_period_end_from_years(target_years_val)
-            
-            months = int(target_years_val * 12)
-            monthly_r = step3_avg_return / 12
-            future_current_capital = current_capital * np.power(1 + monthly_r, months)
-            future_monthly_contribution = monthly_won * (
-                (np.power(1 + monthly_r, months) - 1) / monthly_r
-                if monthly_r != 0
-                else months
-            )
-            achievable_amount = int(future_current_capital + future_monthly_contribution)
-            
-            st.markdown(
-                f"""
-                <div style="
-                    background:linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-                    border-radius:12px;
-                    padding:24px;
-                    text-align:center;
-                    color:white;
-                ">
-                    <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">💰 예상 달성 금액</div>
-                    <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{fmt_money(achievable_amount)}원</div>
-                    <div style="font-size:0.9rem;opacity:0.85;">시뮬레이션 가정 {step3_avg_return_pct:.2f}% 기준 (출처: {step3_sim_source})</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+
+            try:
+                with st.spinner("환율과 ETF 변동성을 반영해 시뮬레이션 중입니다..."):
+                    start_rate = get_current_exchange_rate()
+                    mu_fx, sigma_fx = get_exchange_rate_params()
+                    mu_portfolio, sigma_portfolio = get_portfolio_params(step3_portfolio_weights)
+                    # region agent log
+                    _debug_b8b036_log(
+                        "initial",
+                        "H1,H3,H5",
+                        "app.py:step3:before_run_simulation",
+                        "STEP3 values before simulation",
+                        {
+                            "selected_analysis_mode": selected_analysis_mode,
+                            "target_won": int(target_won),
+                            "current_capital": float(current_capital),
+                            "monthly_won": int(monthly_won),
+                            "target_years_val": float(target_years_val),
+                            "investment_method": _recommended_investment_mode_from_profile(),
+                            "step3_portfolio_weights": step3_portfolio_weights,
+                            "start_rate": float(start_rate),
+                            "mu_fx": float(mu_fx),
+                            "sigma_fx": float(sigma_fx),
+                            "mu_portfolio": float(mu_portfolio),
+                            "sigma_portfolio": float(sigma_portfolio),
+                        },
+                    )
+                    # endregion
+                    simulation_result = run_simulation(
+                        current_capital,
+                        monthly_won,
+                        target_years_val,
+                        _recommended_investment_mode_from_profile(),
+                        mu_portfolio,
+                        sigma_portfolio,
+                        mu_fx,
+                        sigma_fx,
+                        start_rate,
+                        n_simulations=100,
+                    )
+                    median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
+                    paths = np.asarray(simulation_result.get("paths", []), dtype=float)
+
+                    # 중앙값 경로에서 처음으로 목표 달성하는 월
+                    target_hits = np.where(median_path >= target_won)[0] if len(median_path) else []
+                    target_months = int(target_hits[0]) if len(target_hits) else None
+
+                    # 달성 확률: 각 시뮬레이션의 최종 시점 자산이 목표 이상인 비율
+                    if paths.size and target_won > 0:
+                        final_values = paths[:, -1]
+                        reached_count = int(np.sum(final_values >= target_won))
+                        achievement_prob = reached_count / len(final_values) * 100
+                        # region agent log
+                        print(f"[debug-b8b036] final_values sample (first 10): {[round(v) for v in final_values[:10]]}", flush=True)
+                        print(f"[debug-b8b036] target_won={target_won} reached={reached_count}/{len(final_values)} prob={achievement_prob:.1f}%", flush=True)
+                        # endregion
+                    else:
+                        achievement_prob = 0.0
+
+                    final_median = float(median_path[-1]) if len(median_path) else 0.0
+                    sim_months = max(1, len(median_path) - 1)
+                    required_monthly = monthly_won
+                    if target_won > final_median:
+                        required_monthly += int(np.ceil((target_won - final_median) / sim_months))
+
+                    simulation_result["target_months"] = target_months
+                    simulation_result["achievement_prob"] = achievement_prob
+                    simulation_result["required_monthly_contribution"] = int(required_monthly)
+                    # region agent log
+                    _debug_b8b036_log(
+                        "initial",
+                        "H4,H5",
+                        "app.py:step3:after_target_metrics",
+                        "STEP3 target metrics after simulation",
+                        {
+                            "target_won": int(target_won),
+                            "target_hits_first_5": [int(v) for v in target_hits[:5]],
+                            "target_months": target_months,
+                            "achievement_prob": achievement_prob,
+                            "final_median": final_median,
+                            "required_monthly_contribution": int(required_monthly),
+                            "median_first_values": [float(v) for v in median_path[: min(5, len(median_path))]],
+                            "paths_shape": list(paths.shape),
+                            "paths_over_target_count": int(np.sum(np.any(paths >= target_won, axis=1))) if paths.size and target_won > 0 else 0,
+                        },
+                    )
+                    # endregion
+                    st.session_state["simulation_result"] = simulation_result
+            except Exception as exc:
+                st.session_state["simulation_result"] = None
+                st.error(f"시뮬레이션 실행 중 오류가 발생했습니다: {exc}")
+
+        simulation_result = st.session_state.get("simulation_result")
+        if not simulation_result:
+            st.info("입력값을 확인한 뒤 **분석 시작** 버튼을 눌러 주세요.")
+        else:
+            median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
+            target_months = simulation_result.get("target_months")
+            achievement_prob = float(simulation_result.get("achievement_prob", 0.0))
+
+            if selected_analysis_mode == "목표 금액 달성":
+                st.markdown("**📍 분석 모드: 목표 금액 달성**")
+                if target_months is None:
+                    st.warning("⚠️ 중앙값 기준으로는 시뮬레이션 기간 내 목표 금액에 도달하지 못했습니다.")
+                    st.metric("달성 확률", f"{achievement_prob:.1f}%")
+                else:
+                    total_months = int(target_months)
+                    years_calc = total_months // 12
+                    months_remain = total_months % 12
+                    if total_months > 0:
+                        st.session_state["years"] = total_months / 12.0
+                        _sync_unified_sim_period_end_from_years(st.session_state["years"])
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background:linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                            border-radius:12px;
+                            padding:24px;
+                            text-align:center;
+                            color:white;
+                        ">
+                            <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">📅 예상 달성 기간</div>
+                            <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{years_calc}년 {months_remain}개월</div>
+                            <div style="font-size:0.9rem;opacity:0.85;">Monte Carlo 100회 중앙값 기준 · 달성 확률 {achievement_prob:.1f}%</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown("**📍 분석 모드: 목표 기간 확인**")
+                if len(median_path) == 0:
+                    st.warning("⚠️ 시뮬레이션 결과를 표시할 수 없습니다.")
+                else:
+                    _final_median_val = float(median_path[-1])
+                    _eok = int(_final_median_val) // 100_000_000
+                    _man = (int(_final_median_val) % 100_000_000) // 10_000
+                    if _eok > 0 and _man > 0:
+                        _amount_str = f"{_eok}억 {_man:,}만원"
+                    elif _eok > 0:
+                        _amount_str = f"{_eok}억원"
+                    else:
+                        _amount_str = f"{_man:,}만원"
+                    st.markdown(
+                        f"""
+                        <div style="
+                            background:linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                            border-radius:12px;
+                            padding:24px;
+                            text-align:center;
+                            color:white;
+                        ">
+                            <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">예상 달성 금액</div>
+                            <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{_amount_str}</div>
+                            <div style="font-size:0.9rem;opacity:0.85;">Monte Carlo 100회 중앙값 기준 · 달성 확률 {achievement_prob:.1f}%</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
         st.markdown("---")
 
@@ -3712,20 +4177,34 @@ def run_streamlit_app():
                 move_step(2)
             return
 
-        etf_weights = st.session_state.get("etf_weights", {})
-        port_weights = build_portfolio_weights(selected_etfs, etf_weights)
+        simulation_result = st.session_state.get("simulation_result")
+        if not simulation_result:
+            st.warning("STEP3에서 분석 시작 버튼을 눌러 시뮬레이션을 먼저 실행해 주세요.")
+            if st.button("STEP3로 이동", key="goto3d"):
+                move_step(3)
+            return
+
+        # ── session_state에서 데이터 로드 (재계산 없음) ─────────────────────
+        median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
+
+        # "목표 금액 달성" 모드는 최대 100년 시뮬레이션 후 달성 시점만 저장
+        # → median_path를 달성 시점까지만 잘라낸다
+        _s_mode = st.session_state.get("analysis_mode")
+        _target_months_stored = simulation_result.get("target_months")
+        if _s_mode == "목표 금액 달성" and _target_months_stored is not None:
+            _cutoff = int(_target_months_stored) + 1
+            median_path = median_path[:_cutoff]
+
         current_capital = float(st.session_state.get("current_capital", 0.0))
         monthly_won = int(st.session_state.get("monthly_contribution", 0))
         recommended_mode = _recommended_investment_mode_from_profile()
         start_date, end_date, years_sim = _resolve_simulation_period()
-        step6_avg_return, step6_avg_return_pct, step6_sim_source = _get_portfolio_simulation_return(
-            port_weights
-        )
+
         st.write("### 결과 시각화")
 
         summary_cols = st.columns(4)
         with summary_cols[0]:
-            st.metric("투자 기간", format_period_label(start_date, end_date))
+            st.metric("투자 기간", f"{max(0, len(median_path) - 1)}개월")
         with summary_cols[1]:
             st.metric("현재 자금", f"{fmt_money(int(current_capital))}원")
         with summary_cols[2]:
@@ -3733,88 +4212,153 @@ def run_streamlit_app():
         with summary_cols[3]:
             st.metric("투자 방식", recommended_mode)
 
-        st.caption(
-            f"{_format_simulation_return_line(step6_avg_return_pct, step6_sim_source)} · "
-            f"아래 그래프는 변동성을 반영한 몬테카를로 중앙값 경로입니다. "
-            f"STEP3 고정 수익률 계산과 숫자가 다를 수 있습니다."
-        )
-        try:
-            with st.spinner("시뮬레이션 계산 중..."):
-                fig = plot_portfolio_vs_sp500_monte_carlo(
-                    port_weights,
-                    start_date,
-                    end_date,
-                    current_capital,
-                    monthly_won,
-                    recommended_mode,
-                )
-            render_start = time.perf_counter()
+        st.caption("STEP3에서 저장된 Monte Carlo 시뮬레이션 결과를 표시합니다. 이 단계에서는 재계산하지 않습니다.")
+
+        if len(median_path) == 0:
+            st.warning("표시할 시뮬레이션 경로가 없습니다. STEP3에서 다시 분석을 실행해 주세요.")
+        else:
+            # 정규 길이: median_path 기준 (STEP3 투자 기간)
+            _n_months = len(median_path) - 1
+
+            # ── VOO 기준선: 동일 조건, 종목만 VOO 100% ─────────────────────
+            _voo_cache_key = str((
+                int(current_capital), monthly_won, recommended_mode, _n_months
+            ))
+            _voo_median_raw = st.session_state.get("step5_voo_median")
+            _voo_key_raw = st.session_state.get("step5_voo_cache_key")
+
+            if _voo_median_raw is None or _voo_key_raw != _voo_cache_key:
+                try:
+                    _voo_start_rate = get_current_exchange_rate()
+                    _voo_mu_fx, _voo_sigma_fx = get_exchange_rate_params()
+                    _voo_mu, _voo_sigma = get_portfolio_params({"VOO": 1.0})
+                    _voo_sim = run_simulation(
+                        current_capital,
+                        monthly_won,
+                        _n_months / 12.0,       # median_path 개월 수와 정확히 일치
+                        recommended_mode,
+                        _voo_mu,
+                        _voo_sigma,
+                        _voo_mu_fx,
+                        _voo_sigma_fx,
+                        _voo_start_rate,
+                        n_simulations=100,
+                    )
+                    _voo_median = np.asarray(_voo_sim.get("median_path", []), dtype=float)
+                except Exception:
+                    _voo_median = np.array([])
+                st.session_state["step5_voo_median"] = _voo_median.tolist()
+                st.session_state["step5_voo_cache_key"] = _voo_cache_key
+            else:
+                _voo_median = np.asarray(_voo_median_raw, dtype=float)
+
+            # 두 선을 동일한 길이로 맞춤 (STEP3 투자 기간 = _n_months + 1 포인트)
+            _plot_len = _n_months + 1
+            _portfolio_plot = median_path[:_plot_len]
+            _voo_plot = _voo_median[:_plot_len] if len(_voo_median) >= _plot_len else (
+                _voo_median if len(_voo_median) > 0 else np.array([])
+            )
+            _actual_len = min(len(_portfolio_plot), len(_voo_plot)) if len(_voo_plot) > 0 else len(_portfolio_plot)
+            _portfolio_plot = _portfolio_plot[:_actual_len]
+            _voo_plot = _voo_plot[:_actual_len] if len(_voo_plot) > 0 else np.array([])
+
+            # 공통 X축 (두 선 동일 범위)
+            _x_vals = [pd.Timestamp(start_date) + pd.DateOffset(months=i) for i in range(_actual_len)]
+
+            # ── 급락 구간 탐지: 전월 대비 -15% 이상 하락 ──────────────────
+            _crash_months = [
+                i for i in range(1, len(_portfolio_plot))
+                if _portfolio_plot[i - 1] > 0 and _portfolio_plot[i] / _portfolio_plot[i - 1] < 0.85
+            ]
+
+            # ── Plotly 차트 ────────────────────────────────────────────────
+            fig = go.Figure()
+
+            # S&P500 기준선 (회색 점선)
+            if len(_voo_plot) > 0:
+                fig.add_trace(go.Scatter(
+                    x=_x_vals,
+                    y=_voo_plot,
+                    mode="lines",
+                    name="S&P500 기준선 (VOO 100%)",
+                    line=dict(color="#9ca3af", width=2, dash="dash"),
+                    hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+                ))
+
+            # 내 포트폴리오 (파란 실선)
+            fig.add_trace(go.Scatter(
+                x=_x_vals,
+                y=_portfolio_plot,
+                mode="lines",
+                name="내 포트폴리오",
+                line=dict(color="#2563eb", width=3),
+                hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+            ))
+
+            # 급락 구간 Annotation
+            _annotations = []
+            for _cm in _crash_months:
+                if _cm < len(_x_vals):
+                    _annotations.append(dict(
+                        x=_x_vals[_cm],
+                        y=float(_portfolio_plot[_cm]),
+                        text="📌 급락 구간",
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowcolor="#ef4444",
+                        arrowwidth=1.5,
+                        ax=0,
+                        ay=-40,
+                        font=dict(size=10, color="#ef4444"),
+                        bgcolor="rgba(255,255,255,0.9)",
+                        bordercolor="#ef4444",
+                        borderwidth=1,
+                        borderpad=3,
+                    ))
+
+            fig.update_layout(
+                title=f"Monte Carlo 시뮬레이션 경로 ({recommended_mode})",
+                xaxis=dict(
+                    title="투자 기간",
+                    tickformat="%Y년",
+                    dtick="M12",
+                    ticklabelmode="period",
+                ),
+                yaxis=dict(
+                    title="자산 금액 (원)",
+                    tickformat=",",
+                ),
+                template="plotly_white",
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                annotations=_annotations,
+            )
             st.plotly_chart(fig, use_container_width=True)
-            # region agent log
-            _agent_debug_log(
-                "pre-fix",
-                "H5",
-                "app.py:run_streamlit_app:plotly_chart",
-                "Plotly chart rendered",
-                {"duration_ms": round((time.perf_counter() - render_start) * 1000, 2)},
-            )
-            # endregion
-            st.markdown(
-                """
-                <style>
-                .step6-info-box {
-                    background: #e8f4fd;
-                    border: 1px solid #b6d9f7;
-                    border-radius: 8px;
-                    padding: 16px 18px;
-                    margin: 12px 0;
-                }
-                .step6-info-row {
-                    display: flex;
-                    align-items: flex-start;
-                    gap: 12px;
-                }
-                .step6-info-row + .step6-info-row {
-                    margin-top: 14px;
-                    padding-top: 14px;
-                    border-top: 1px solid #cfe6f8;
-                }
-                .step6-info-icon {
-                    flex: 0 0 24px;
-                    width: 24px;
-                    text-align: center;
-                    font-size: 1.1rem;
-                    line-height: 1.5;
-                }
-                .step6-info-text {
-                    flex: 1;
-                    color: #0f2b46;
-                    font-size: 0.95rem;
-                    line-height: 1.6;
-                }
-                </style>
-                <div class="step6-info-box">
-                    <div class="step6-info-row">
-                        <span class="step6-info-icon">📌</span>
-                        <div class="step6-info-text">
-                            <strong>급락 구간 기준</strong><br>
-                            내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 구간을 급락 구간으로 표시합니다.
-                        </div>
-                    </div>
-                    <div class="step6-info-row">
-                        <span class="step6-info-icon">💡</span>
-                        <div class="step6-info-text">
-                            <strong>급락 구간은 추가 매수 기회입니다.</strong><br>
-                            여유 현금이 있다면 해당 시점에 추가 투자를 고려해보세요.
-                            장기적으로 저점 매수 효과를 기대할 수 있습니다.
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        except RuntimeError as exc:
-            st.error(str(exc))
+
+            # ── 급락 구간 설명 ─────────────────────────────────────────────
+            st.markdown("#### 급락 구간 설명")
+            if _crash_months:
+                _crash_lines = [
+                    f"- {_x_vals[m].strftime('%Y년 %m월')}: "
+                    f"{(_portfolio_plot[m] / _portfolio_plot[m - 1] - 1) * 100:.1f}%"
+                    for m in _crash_months
+                    if m < len(_x_vals)
+                ]
+                st.warning(
+                    "급락 구간이 감지되었습니다.\n\n"
+                    + "\n".join(_crash_lines)
+                )
+                st.info(
+                    "급락 구간은 내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 시점입니다. "
+                    "여유 현금이 있다면 해당 시점에 추가 투자를 고려할 수 있습니다."
+                )
+            else:
+                st.info(
+                    "급락 구간 없음\n\n"
+                    "이번 시뮬레이션에서는 전월 대비 15% 이상 하락 구간이 발생하지 않았습니다.\n\n"
+                    "기준: 내 포트폴리오 중앙값이 전월 대비 15% 이상 하락한 시점을 그래프에 표시합니다."
+                )
+
         cols = st.columns([2, 2, 1])
         nav_cols = cols[0].columns(2)
         if nav_cols[0].button("이전", key="prev_6"):
