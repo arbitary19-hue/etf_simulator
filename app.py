@@ -97,6 +97,15 @@ ETF_DATA = {
 }
 
 
+def _close_series(hist):
+    """yfinance history()의 Close 컬럼을 항상 1차원 numeric Series로 반환합니다.
+    yfinance 버전에 따라 hist['Close']가 DataFrame으로 반환될 수 있어 squeeze() 처리합니다."""
+    col = hist["Close"]
+    if isinstance(col, pd.DataFrame):
+        col = col.iloc[:, 0]
+    return pd.to_numeric(col.squeeze(), errors="coerce")
+
+
 @st.cache_data
 def load_etf_cagr():
     import yfinance as yf
@@ -105,8 +114,11 @@ def load_etf_cagr():
             etf = yf.Ticker(ticker)
             hist = etf.history(period="max", auto_adjust=True)
             if hist is not None and len(hist) > 0:
-                start = hist['Close'].iloc[0]
-                end = hist['Close'].iloc[-1]
+                _close = _close_series(hist).dropna()
+                if _close.empty:
+                    continue
+                start = _close.iloc[0]
+                end = _close.iloc[-1]
                 years = len(hist) / 252
                 cagr = (end / start) ** (1 / years) - 1
                 ETF_DATA[ticker]['cagr'] = round(cagr, 4)
@@ -1021,7 +1033,7 @@ def _get_etf_annual_return(ticker):
 def _calc_cagr_pct_from_hist(hist):
     if hist is None or hist.empty or "Close" not in hist:
         return None, None
-    close = hist["Close"].dropna()
+    close = _close_series(hist).dropna()
     if close.empty:
         return None, None
     first_close = float(close.iloc[0])
@@ -1305,7 +1317,7 @@ def _get_usdkrw_rate():
         hist = fx.history(period="5d", auto_adjust=True)
         if hist.empty:
             return 1400.0
-        return float(hist["Close"].iloc[-1])
+        return float(_close_series(hist).dropna().iloc[-1])
     except Exception:
         return 1400.0
 
@@ -1333,8 +1345,9 @@ def _get_live_etf_snapshot(ticker):
         annual_return_pct = None
         hist = etf.history(period="max", auto_adjust=True)
         if hist is not None and not hist.empty and len(hist) >= 252:
-            first_close = float(hist["Close"].iloc[0])
-            last_close = float(hist["Close"].iloc[-1])
+            _hist_close = _close_series(hist).dropna()
+            first_close = float(_hist_close.iloc[0])
+            last_close = float(_hist_close.iloc[-1])
             elapsed_years = max((hist.index[-1] - hist.index[0]).days / 365.25, 1e-6)
             if first_close > 0 and last_close > 0 and elapsed_years > 0:
                 annual_return_pct = ((last_close / first_close) ** (1 / elapsed_years) - 1) * 100
@@ -1686,7 +1699,7 @@ def get_exchange_rate_params():
     if hist is None or hist.empty or "Close" not in hist:
         return 0.0, 0.025
 
-    close = hist["Close"].dropna()
+    close = _close_series(hist).dropna()
     close = close[(close >= 500) & (close <= 3000)]
     monthly_returns = close.pct_change().dropna()
     monthly_returns = monthly_returns[np.isfinite(monthly_returns) & (monthly_returns.abs() < 0.5)]
@@ -1715,7 +1728,7 @@ def get_portfolio_params(etf_weights):
             if hist is None or hist.empty or "Close" not in hist:
                 continue
 
-            daily_returns = hist["Close"].dropna().pct_change().dropna()
+            daily_returns = _close_series(hist).dropna().pct_change().dropna()
             if daily_returns.empty:
                 continue
 
@@ -1749,7 +1762,7 @@ def _get_live_usdkrw_rate():
             if rate is None:
                 hist = ticker.history(period="5d", auto_adjust=True)
                 if hist is not None and not hist.empty:
-                    rate = hist["Close"].dropna().iloc[-1]
+                    rate = _close_series(hist).dropna().iloc[-1]
             if rate is not None and float(rate) > 0:
                 return float(rate)
         except Exception:
@@ -1768,7 +1781,7 @@ def _get_usdkrw_monthly_stats():
             hist = yf.Ticker(symbol).history(period="10y", interval="1mo", auto_adjust=True)
             if hist is None or hist.empty:
                 continue
-            monthly_returns = hist["Close"].dropna().pct_change().dropna()
+            monthly_returns = _close_series(hist).dropna().pct_change().dropna()
             if len(monthly_returns) >= 24:
                 return float(monthly_returns.mean()), float(monthly_returns.std(ddof=1))
         except Exception:
@@ -1784,7 +1797,7 @@ def _get_voo_daily_stats_since_inception():
 
     try:
         hist = yf.Ticker("VOO").history(period="max", auto_adjust=True)
-        daily_returns = hist["Close"].dropna().pct_change().dropna()
+        daily_returns = _close_series(hist).dropna().pct_change().dropna()
         if len(daily_returns) < 252:
             return 0.08, 0.16
         annual_mu = float(daily_returns.mean() * 252)
@@ -2310,7 +2323,7 @@ def load_voo_daily_return_profile():
     if hist.empty or "Close" not in hist:
         raise RuntimeError("VOO 가격 데이터를 불러오지 못했습니다.")
 
-    daily_returns = hist["Close"].pct_change().dropna()
+    daily_returns = _close_series(hist).dropna().pct_change().dropna()
     if daily_returns.empty:
         raise RuntimeError("VOO 일별 수익률 데이터를 계산하지 못했습니다.")
 
