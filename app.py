@@ -4495,63 +4495,115 @@ def run_streamlit_app():
             # ── Plotly 차트 ────────────────────────────────────────────────
             fig = go.Figure()
 
-            # S&P500 기준선 (회색 점선)
+            # S&P500 기준선
             if len(_voo_plot) > 0:
                 fig.add_trace(go.Scatter(
                     x=_x_vals,
                     y=_voo_plot,
                     mode="lines",
                     name="S&P500 기준선 (VOO 대표 경로)",
-                    line=dict(color="#9ca3af", width=2, dash="dash"),
+                    line=dict(color="#9CA3AF", width=1.5, dash="solid"),
                     hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
                 ))
 
-            # 내 포트폴리오 (파란 실선)
+            # 내 포트폴리오
             fig.add_trace(go.Scatter(
                 x=_x_vals,
                 y=_portfolio_plot,
                 mode="lines",
                 name="내 포트폴리오 (대표 경로)",
-                line=dict(color="#2563eb", width=3),
+                line=dict(color="#2563EB", width=3),
                 hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
             ))
 
-            # 급락 구간 Annotation
+            _target_won_hline = int(st.session_state.get("target_amount", 0))
+            if _target_won_hline > 0:
+                fig.add_hline(
+                    y=_target_won_hline,
+                    line_dash="dot",
+                    line_color="red",
+                    opacity=0.7,
+                    annotation_text="목표 금액",
+                    annotation_position="right",
+                )
+
+            _y_data_max = float(np.max(_portfolio_plot)) if len(_portfolio_plot) else 0.0
+            if len(_voo_plot) > 0:
+                _y_data_max = max(_y_data_max, float(np.max(_voo_plot)))
+            _y_axis_top = _y_data_max * 1.12 if _y_data_max > 0 else 1.0
+            if _target_won_hline > 0:
+                _y_axis_top = max(_y_axis_top, _target_won_hline * 1.08)
+            _n_y_ticks = 6
+            _y_tick_values = (
+                [float(i * _y_axis_top / (_n_y_ticks - 1)) for i in range(_n_y_ticks)]
+                if _y_axis_top > 0
+                else [0.0]
+            )
+            _y_tick_text = [f"{v / 100_000_000:.1f}억" for v in _y_tick_values]
+
+            # 급락 구간 Annotation (상단 근처는 핀을 아래로 배치해 그래프 밖으로 나가지 않게 함)
             _annotations = []
+            _has_upper_crash_pin = False
             for _cm in _crash_months:
                 if _cm < len(_x_vals):
+                    _crash_y = float(_portfolio_plot[_cm])
+                    _near_top = _y_axis_top > 0 and (_crash_y / _y_axis_top) >= 0.72
+                    if _near_top:
+                        _has_upper_crash_pin = True
+                        _pin_ay = 34
+                    else:
+                        _pin_ay = -34
                     _annotations.append(dict(
                         x=_x_vals[_cm],
-                        y=float(_portfolio_plot[_cm]),
-                        text="📌 급락 구간",
+                        y=_crash_y,
+                        xref="x",
+                        yref="y",
+                        text="📌",
                         showarrow=True,
                         arrowhead=2,
                         arrowcolor="#ef4444",
                         arrowwidth=1.5,
                         ax=0,
-                        ay=-40,
-                        font=dict(size=10, color="#ef4444"),
+                        ay=_pin_ay,
+                        font=dict(size=20, color="#ef4444"),
                         bgcolor="rgba(255,255,255,0.9)",
                         bordercolor="#ef4444",
                         borderwidth=1,
-                        borderpad=3,
+                        borderpad=2,
                     ))
+
+            _plot_margin_top = 90 if _has_upper_crash_pin else 60
 
             fig.update_layout(
                 title=f"Monte Carlo 시뮬레이션 경로 ({recommended_mode})",
+                plot_bgcolor="#f8f9fa",
+                paper_bgcolor="white",
+                font=dict(family="Malgun Gothic", size=13),
+                margin=dict(l=80, r=40, t=_plot_margin_top, b=60),
+                hovermode="x unified",
+                legend=dict(
+                    x=0.01,
+                    y=0.99,
+                    xanchor="left",
+                    yanchor="top",
+                    bgcolor="rgba(255,255,255,0.85)",
+                ),
                 xaxis=dict(
                     title="투자 기간",
                     tickformat="%Y년",
                     dtick="M12",
                     ticklabelmode="period",
+                    showgrid=False,
                 ),
                 yaxis=dict(
-                    title="자산 금액 (원)",
-                    tickformat=",",
+                    title="자산 금액",
+                    range=[0, _y_axis_top],
+                    tickvals=_y_tick_values,
+                    ticktext=_y_tick_text,
+                    gridcolor="#E5E7EB",
+                    gridwidth=0.5,
+                    showgrid=True,
                 ),
-                template="plotly_white",
-                hovermode="x unified",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 annotations=_annotations,
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -4565,6 +4617,136 @@ def run_streamlit_app():
                     f"표시된 파란 선은 Monte Carlo 100회 중 급락 횟수가 가장 많은 대표 경로입니다. "
                     f"이번 결과에서는 목표 급락 횟수 {_target_crashes}회 중 {_selected_crashes}회가 감지되었습니다."
                 )
+
+            # ── 3. Monte Carlo 불확실성 구간 (10~90% 밴드) ─────────────────
+            st.markdown("---")
+            st.markdown("#### 📊 Monte Carlo 불확실성 구간")
+
+            _band_median = np.asarray(simulation_result.get("median_path", []), dtype=float)
+            _band_upper = np.asarray(simulation_result.get("upper_path", []), dtype=float)
+            _band_lower = np.asarray(simulation_result.get("lower_path", []), dtype=float)
+            if _s_mode == "목표 금액 달성" and _target_months_stored is not None:
+                _band_cutoff = int(_target_months_stored) + 1
+                _band_median = _band_median[:_band_cutoff]
+                _band_upper = _band_upper[:_band_cutoff]
+                _band_lower = _band_lower[:_band_cutoff]
+
+            _band_len = min(
+                len(_band_median),
+                len(_band_upper) if len(_band_upper) else len(_band_median),
+                len(_band_lower) if len(_band_lower) else len(_band_median),
+            )
+            if _band_len > 0:
+                _band_median = _band_median[:_band_len]
+                _band_upper = _band_upper[:_band_len]
+                _band_lower = _band_lower[:_band_len]
+                _x_band = [
+                    pd.Timestamp(start_date) + pd.DateOffset(months=i)
+                    for i in range(_band_len)
+                ]
+
+                fig_band = go.Figure()
+                fig_band.add_trace(go.Scatter(
+                    x=list(_x_band) + list(_x_band[::-1]),
+                    y=list(_band_upper) + list(_band_lower[::-1]),
+                    fill="toself",
+                    fillcolor="rgba(37, 99, 235, 0.18)",
+                    line=dict(color="rgba(255,255,255,0)"),
+                    name="10~90% 구간",
+                    hoverinfo="skip",
+                    showlegend=True,
+                ))
+                fig_band.add_trace(go.Scatter(
+                    x=_x_band,
+                    y=_band_lower,
+                    mode="lines",
+                    name="하위 10%",
+                    line=dict(color="rgba(37, 99, 235, 0.35)", width=1, dash="dot"),
+                    hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+                ))
+                fig_band.add_trace(go.Scatter(
+                    x=_x_band,
+                    y=_band_upper,
+                    mode="lines",
+                    name="상위 10%",
+                    line=dict(color="rgba(37, 99, 235, 0.35)", width=1, dash="dot"),
+                    hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+                ))
+                fig_band.add_trace(go.Scatter(
+                    x=_x_band,
+                    y=_band_median,
+                    mode="lines",
+                    name="중앙값 (50%)",
+                    line=dict(color="#2563EB", width=2.5),
+                    hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+                ))
+
+                if _target_won_hline > 0:
+                    fig_band.add_hline(
+                        y=_target_won_hline,
+                        line_dash="dot",
+                        line_color="red",
+                        opacity=0.7,
+                        annotation_text="목표 금액",
+                        annotation_position="right",
+                    )
+
+                _band_y_max = float(
+                    max(
+                        np.max(_band_upper) if len(_band_upper) else 0.0,
+                        np.max(_band_median) if len(_band_median) else 0.0,
+                    )
+                )
+                _band_y_top = _band_y_max * 1.12 if _band_y_max > 0 else 1.0
+                if _target_won_hline > 0:
+                    _band_y_top = max(_band_y_top, _target_won_hline * 1.08)
+                _band_n_ticks = 6
+                _band_tick_values = (
+                    [float(i * _band_y_top / (_band_n_ticks - 1)) for i in range(_band_n_ticks)]
+                    if _band_y_top > 0
+                    else [0.0]
+                )
+                _band_tick_text = [f"{v / 100_000_000:.1f}억" for v in _band_tick_values]
+
+                fig_band.update_layout(
+                    title="Monte Carlo 100회 시뮬레이션 · 불확실성 범위",
+                    plot_bgcolor="#f8f9fa",
+                    paper_bgcolor="white",
+                    font=dict(family="Malgun Gothic", size=13),
+                    margin=dict(l=80, r=40, t=60, b=60),
+                    hovermode="x unified",
+                    legend=dict(
+                        x=0.01,
+                        y=0.99,
+                        xanchor="left",
+                        yanchor="top",
+                        bgcolor="rgba(255,255,255,0.85)",
+                    ),
+                    xaxis=dict(
+                        title="투자 기간",
+                        tickformat="%Y년",
+                        dtick="M12",
+                        ticklabelmode="period",
+                        showgrid=False,
+                    ),
+                    yaxis=dict(
+                        title="자산 금액",
+                        range=[0, _band_y_top],
+                        tickvals=_band_tick_values,
+                        ticktext=_band_tick_text,
+                        gridcolor="#E5E7EB",
+                        gridwidth=0.5,
+                        showgrid=True,
+                    ),
+                )
+                st.plotly_chart(fig_band, use_container_width=True)
+                st.caption(
+                    "음영은 100회 시뮬 중 하위 10%~상위 10% 구간이고, "
+                    "파란 실선은 중앙값(50%)입니다. 대표 경로 그래프와 달리 "
+                    "개별 시나리오가 아니라 결과가 퍼질 수 있는 범위를 보여줍니다."
+                )
+            else:
+                st.info("불확실성 구간을 표시할 시뮬레이션 데이터가 없습니다.")
 
             # ── 급락 구간 설명 ─────────────────────────────────────────────
             st.markdown("---")
@@ -4590,6 +4772,111 @@ def run_streamlit_app():
                     "이번 시뮬레이션에서는 전월 대비 10% 이상 하락 구간이 발생하지 않았습니다.\n\n"
                     "기준: 내 포트폴리오 대표 경로가 전월 대비 10% 이상 하락한 시점을 그래프에 표시합니다."
                 )
+
+            # ── 세금 영향 분석 ─────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 💰 세금 고려 시 예상 자산")
+
+            _CAPITAL_GAINS_TAX_RATE = 0.22
+            _DIVIDEND_INCOME_TAX_RATE = 0.154
+            _MONTHLY_DIVIDEND_ETFS = {"JEPI", "JEPQ", "QYLD"}
+            _goal_month = max(0, len(_portfolio_plot) - 1)
+            _goal_exchange_rate = _sim_start_rate * ((1 + _sim_mu_fx) ** _goal_month)
+
+            if _target_months_stored is not None and _s_mode == "목표 금액 달성":
+                _tm_goal = int(_target_months_stored)
+                _goal_period_label = (
+                    f"{_tm_goal // 12}년 {_tm_goal % 12}개월"
+                    if _tm_goal % 12
+                    else f"{_tm_goal // 12}년"
+                )
+            elif _goal_month < len(_x_vals):
+                _goal_period_label = _x_vals[_goal_month].strftime("%Y년 %m월")
+            else:
+                _goal_period_label = f"{_goal_month}개월"
+
+            _stock_pretax = float(_portfolio_plot[_goal_month])
+            _total_invested = current_capital + monthly_won * _goal_month
+            _capital_gain = max(0.0, _stock_pretax - _total_invested)
+            _cg_tax = int(round(_capital_gain * _CAPITAL_GAINS_TAX_RATE))
+            _stock_after = int(round(_stock_pretax - _cg_tax))
+
+            _step5_selected_etfs = st.session_state.get("selected_etfs", [])
+            _step5_etf_weights = st.session_state.get("etf_weights", {})
+            try:
+                _step5_portfolio_weights = build_portfolio_weights(_step5_selected_etfs, _step5_etf_weights)
+            except Exception:
+                _step5_portfolio_weights = {
+                    t: 1.0 / max(1, len(_step5_selected_etfs)) for t in _step5_selected_etfs
+                }
+
+            _dividend_yields = {
+                _ticker: _dy
+                for _ticker in _step5_selected_etfs
+                if ETF_DATA.get(_ticker, {}).get("카테고리") in {"배당성장", "배당집중"}
+                and (_dy := _get_etf_dividend_yield(_ticker)) is not None
+                and 0.01 <= _dy <= 0.20
+            }
+
+            _cumulative_div_pretax_won = 0.0
+            _cumulative_div_tax_won = 0.0
+            if _dividend_yields and _goal_month > 0:
+                _dividend_asset_usd = {
+                    _ticker: (current_capital * _step5_portfolio_weights.get(_ticker, 0)) / _sim_start_rate
+                    for _ticker in _dividend_yields
+                }
+                _monthly_growth_rates = {
+                    _ticker: (1 + max(_get_etf_cagr_rate(_ticker), -0.99)) ** (1 / 12) - 1
+                    for _ticker in _dividend_yields
+                }
+                for _month in range(1, _goal_month + 1):
+                    _month_exchange_rate = _sim_start_rate * ((1 + _sim_mu_fx) ** _month)
+                    _month_div_usd = 0.0
+                    for _ticker, _dy in _dividend_yields.items():
+                        _weight = _step5_portfolio_weights.get(_ticker, 0)
+                        if monthly_won > 0 and _weight > 0:
+                            _dividend_asset_usd[_ticker] += (monthly_won * _weight) / _month_exchange_rate
+                        _dividend_asset_usd[_ticker] *= max(0.0, 1 + _monthly_growth_rates.get(_ticker, 0.0))
+                        _ann_div_usd = _dividend_asset_usd[_ticker] * _dy
+                        _mon_div_usd = (
+                            _ann_div_usd / 12
+                            if _ticker in _MONTHLY_DIVIDEND_ETFS
+                            else (_ann_div_usd / 4) / 3
+                        )
+                        _month_div_usd += _mon_div_usd
+                    _month_div_won = _month_div_usd * _month_exchange_rate
+                    _cumulative_div_pretax_won += _month_div_won
+                    _cumulative_div_tax_won += _month_div_won * _DIVIDEND_INCOME_TAX_RATE
+
+            _div_pretax = int(round(_cumulative_div_pretax_won))
+            _div_tax = int(round(_cumulative_div_tax_won))
+            _div_after = int(round(_cumulative_div_pretax_won - _cumulative_div_tax_won))
+            _final_holding = _stock_after + _div_after
+
+            st.markdown(
+                f"""
+**목표 달성 시점:** {_goal_period_label} (환율 {_goal_exchange_rate:,.0f}원/달러)
+
+- 주식 자산 (세전): **{fmt_money(int(round(_stock_pretax)))}원**
+- 양도소득세 22% 차감: **-{fmt_money(_cg_tax)}원**
+- 주식 자산 (세후): **{fmt_money(_stock_after)}원**
+
+**배당금 (누적)**
+
+- 배당금 합계 (세전): **{fmt_money(_div_pretax)}원**
+- 배당소득세 15.4% 누적 차감: **-{fmt_money(_div_tax)}원**
+- 배당금 (세후): **{fmt_money(_div_after)}원**
+
+**최종 보유액**
+
+주식(세후) + 배당금(세후) = **{fmt_money(_final_holding)}원**
+                """
+            )
+            st.caption(
+                "양도소득세는 투입 원금 대비 이익분에 22%를 적용했고, "
+                "배당소득세는 매월 배당 수령 시 15.4%를 누적 반영했습니다. "
+                "환율은 시뮬레이션 시작 환율과 월별 환율 변동 기댓값을 복리 적용한 추정치입니다."
+            )
 
         cols = st.columns([2, 2, 1])
         nav_cols = cols[0].columns(2)
