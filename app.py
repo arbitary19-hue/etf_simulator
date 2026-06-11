@@ -1085,9 +1085,6 @@ def _format_historical_return_value(hist_info):
 
 def _format_historical_return_line(hist_info):
     value = _format_historical_return_value(hist_info)
-    source = (hist_info or {}).get("source")
-    if source:
-        return f"{HISTORICAL_RETURN_LABEL}: {value} (출처: {source})"
     return f"{HISTORICAL_RETURN_LABEL}: {value}"
 
 
@@ -1503,7 +1500,6 @@ def _build_etf_replace_comparison_df(replace_options, current_ticker):
         rows.append({
             "종목": f"{option_ticker} · 현재" if is_current else option_ticker,
             HISTORICAL_RETURN_LABEL: _format_historical_return_value(hist_info),
-            "출처": hist_info.get("source") or "-",
             "위험도": f"{'★' * risk_stars}{'☆' * (5 - risk_stars)}",
             "배당수익률": f"{dividend_yield:.1f}%" if dividend_yield is not None else "-",
             "보수율": f"{info.get('보수율', 0) * 100:.2f}%",
@@ -1518,7 +1514,7 @@ def _render_etf_replace_comparison_table(replace_options, current_ticker):
         return
 
     comparison_df = _build_etf_replace_comparison_df(replace_options, current_ticker)
-    display_cols = ["종목", HISTORICAL_RETURN_LABEL, "출처", "위험도", "배당수익률", "보수율"]
+    display_cols = ["종목", HISTORICAL_RETURN_LABEL, "위험도", "배당수익률", "보수율"]
 
     def _highlight_current_row(row):
         is_current = bool(comparison_df.loc[row.name, "_is_current"])
@@ -3678,7 +3674,7 @@ def run_streamlit_app():
         target_won = int(st.session_state.get("target_amount", 0))
         current_capital = float(st.session_state.get("current_capital", 0.0))
         monthly_won = int(st.session_state.get("monthly_contribution", 0))
-        selected_mode = st.session_state.get("analysis_mode")
+        selected_mode = simulation_result.get("sim_mode", st.session_state.get("analysis_mode"))
         etf_weights = st.session_state.get("etf_weights", {})
         achievement_prob = float(simulation_result.get("achievement_prob", 0.0))
 
@@ -3766,12 +3762,15 @@ def run_streamlit_app():
         # ===== 섹션 3: 투자 목표 및 시나리오 =====
         st.markdown("### 🎲 3. 투자 목표 및 시나리오")
 
-        # 포트폴리오 예상 연 수익률 (ETF 상장 이후 CAGR 가중평균)
-        try:
-            _, _annual_return_pct, _annual_return_source = _get_portfolio_simulation_return(portfolio_weights)
-        except Exception:
-            _annual_return_pct = None
-            _annual_return_source = None
+        # 포트폴리오 예상 연 수익률 — 실제 시뮬레이션에 사용된 값을 표시
+        _annual_return_pct = simulation_result.get("sim_annual_rate")
+        _annual_return_source = "시뮬레이션 실행 시점"
+        if _annual_return_pct is None:
+            try:
+                _, _annual_return_pct, _annual_return_source = _get_portfolio_simulation_return(portfolio_weights)
+            except Exception:
+                _annual_return_pct = None
+                _annual_return_source = None
 
         _expected_amount_label = "목표 금액"
         _expected_amount_value = f"{fmt_money(target_won)}원"
@@ -3824,7 +3823,6 @@ def run_streamlit_app():
                 else:
                     _amt = f"{_man:,}만원"
                 st.write(f"• **예상 달성 금액:** {_amt}")
-                st.write(f"• **달성 확률:** {achievement_prob:.1f}%")
                 if target_won > 0 and _final_median_val >= target_won:
                     st.success("✅ 중앙값 기준으로 목표 금액 달성이 가능합니다.")
 
@@ -3981,7 +3979,7 @@ def run_streamlit_app():
 
         st.markdown("---")
 
-        step_button_row()
+        step_button_row(can_prev=False)
 
     elif current_step == 3:
         if not profile_weights:
@@ -4232,21 +4230,26 @@ def run_streamlit_app():
                     median_path = np.asarray(simulation_result.get("median_path", []), dtype=float)
                     paths = np.asarray(simulation_result.get("paths", []), dtype=float)
 
-                    # 중앙값 경로에서 처음으로 목표 달성하는 월
-                    target_hits = np.where(median_path >= target_won)[0] if len(median_path) else []
-                    target_months = int(target_hits[0]) if len(target_hits) else None
+                    # 목표 금액 달성 모드에서만: 중앙값 3개월 연속 목표 이상 유지 첫 시점
+                    target_months = None
+                    achievement_prob = 0.0
+                    if selected_analysis_mode == "목표 금액 달성":
+                        _SUSTAIN = 3
+                        if len(median_path) >= _SUSTAIN:
+                            for _ti in range(len(median_path) - _SUSTAIN + 1):
+                                if all(median_path[_ti + k] >= target_won for k in range(_SUSTAIN)):
+                                    target_months = _ti
+                                    break
 
-                    # 달성 확률: 각 시뮬레이션의 최종 시점 자산이 목표 이상인 비율
-                    if paths.size and target_won > 0:
-                        final_values = paths[:, -1]
-                        reached_count = int(np.sum(final_values >= target_won))
-                        achievement_prob = reached_count / len(final_values) * 100
-                        # region agent log
-                        print(f"[debug-b8b036] final_values sample (first 10): {[round(v) for v in final_values[:10]]}", flush=True)
-                        print(f"[debug-b8b036] target_won={target_won} reached={reached_count}/{len(final_values)} prob={achievement_prob:.1f}%", flush=True)
-                        # endregion
-                    else:
-                        achievement_prob = 0.0
+                        # 달성 확률: 100개 경로 중 최종값 ≥ 목표 금액 비율
+                        if paths.size and target_won > 0:
+                            final_values = paths[:, -1]
+                            reached_count = int(np.sum(final_values >= target_won))
+                            achievement_prob = reached_count / len(final_values) * 100
+                            # region agent log
+                            print(f"[debug-b8b036] final_values sample (first 10): {[round(v) for v in final_values[:10]]}", flush=True)
+                            print(f"[debug-b8b036] target_won={target_won} reached={reached_count}/{len(final_values)} prob={achievement_prob:.1f}%", flush=True)
+                            # endregion
 
                     final_median = float(median_path[-1]) if len(median_path) else 0.0
                     sim_months = max(1, len(median_path) - 1)
@@ -4256,6 +4259,8 @@ def run_streamlit_app():
 
                     simulation_result["target_months"] = target_months
                     simulation_result["achievement_prob"] = achievement_prob
+                    simulation_result["sim_mode"] = selected_analysis_mode
+                    simulation_result["sim_annual_rate"] = float(_portfolio_annual_rate * 100)
                     simulation_result["required_monthly_contribution"] = int(required_monthly)
                     # STEP6 비교선에서도 동일한 환율 조건을 재사용하기 위해 저장
                     simulation_result["sim_start_rate"] = float(start_rate)
@@ -4269,7 +4274,7 @@ def run_streamlit_app():
                         "STEP3 target metrics after simulation",
                         {
                             "target_won": int(target_won),
-                            "target_hits_first_5": [int(v) for v in target_hits[:5]],
+                            "target_hits_first_5": [target_months] if target_months is not None else [],
                             "target_months": target_months,
                             "achievement_prob": achievement_prob,
                             "final_median": final_median,
@@ -4304,7 +4309,6 @@ def run_streamlit_app():
                     months_remain = total_months % 12
                     if total_months > 0:
                         st.session_state["years"] = total_months / 12.0
-                        _sync_unified_sim_period_end_from_years(st.session_state["years"])
                     st.markdown(
                         f"""
                         <div style="
@@ -4381,7 +4385,7 @@ def run_streamlit_app():
 
         # "목표 금액 달성" 모드는 최대 100년 시뮬레이션 후 달성 시점만 저장
         # → median_path를 달성 시점까지만 잘라낸다
-        _s_mode = st.session_state.get("analysis_mode")
+        _s_mode = simulation_result.get("sim_mode", st.session_state.get("analysis_mode"))
         _target_months_stored = simulation_result.get("target_months")
         if _s_mode == "목표 금액 달성" and _target_months_stored is not None:
             _cutoff = int(_target_months_stored) + 1
@@ -4406,7 +4410,6 @@ def run_streamlit_app():
         with summary_cols[3]:
             st.metric("투자 방식", recommended_mode)
 
-        st.caption("STEP3에서 저장된 Monte Carlo 시뮬레이션 결과를 표시합니다. 이 단계에서는 재계산하지 않습니다.")
 
         if len(median_path) == 0:
             st.warning("표시할 시뮬레이션 경로가 없습니다. STEP3에서 다시 분석을 실행해 주세요.")
@@ -4460,17 +4463,31 @@ def run_streamlit_app():
                 _voo_median = np.asarray(_voo_median_raw, dtype=float)
                 _voo_paths = np.asarray(st.session_state.get("step5_voo_paths", []), dtype=float)
 
+            # "목표 금액 달성" 모드에서는 마지막 시점에 목표를 달성한 경로만 후보로 사용
+            _target_won_filter = int(st.session_state.get("target_amount", 0))
+            _sim_paths_for_repr = sim_paths
+            if (
+                _s_mode == "목표 금액 달성"
+                and _target_won_filter > 0
+                and sim_paths.ndim == 2
+                and sim_paths.shape[0] > 0
+            ):
+                _final_vals = sim_paths[:, -1]
+                _achieved_mask = _final_vals >= _target_won_filter
+                if np.sum(_achieved_mask) > 0:
+                    _sim_paths_for_repr = sim_paths[_achieved_mask]
+
             _representative_path, _selected_crashes, _target_crashes, _target_met = _select_representative_crash_path(
-                sim_paths,
+                _sim_paths_for_repr,
                 median_path,
                 _n_months,
-                threshold=-0.10,
+                threshold=-0.15,
             )
             _voo_representative_path, _, _, _ = _select_representative_crash_path(
                 _voo_paths,
                 _voo_median,
                 _n_months,
-                threshold=-0.10,
+                threshold=-0.15,
             )
 
             # 두 선을 동일한 길이로 맞춤 (STEP3 투자 기간 = _n_months + 1 포인트)
@@ -4486,14 +4503,44 @@ def run_streamlit_app():
             # 공통 X축 (두 선 동일 범위)
             _x_vals = [pd.Timestamp(start_date) + pd.DateOffset(months=i) for i in range(_actual_len)]
 
-            # ── 급락 구간 탐지: 전월 대비 -10% 이상 하락 ──────────────────
+            # ── 목표 금액 달성 모드: 대표 경로(파란 선) 기준으로 3개월 연속 목표 유지 시점 재계산 ──
+            if _s_mode == "목표 금액 달성":
+                _crash_target_won = int(st.session_state.get("target_amount", 0))
+                _crash_achieved_at = None
+                if _crash_target_won > 0 and len(_portfolio_plot) >= 3:
+                    for _ti in range(1, len(_portfolio_plot) - 2):
+                        if all(_portfolio_plot[_ti + k] >= _crash_target_won for k in range(3)):
+                            _crash_achieved_at = _ti
+                            break
+                if _crash_achieved_at is not None:
+                    _trim = _crash_achieved_at + 3  # 달성 후 3개월까지 보여줌
+                    _portfolio_plot = _portfolio_plot[:_trim]
+                    _voo_plot = _voo_plot[:_trim] if len(_voo_plot) >= _trim else _voo_plot
+                    _actual_len = len(_portfolio_plot)
+                    _x_vals = _x_vals[:_actual_len]
+                    _target_months_stored = _crash_achieved_at  # 밴드차트·📅·세금 계산에 반영
+
+            # ── 급락 구간 탐지: 전월 대비 -15% 이상 하락 ──────────────────
             _crash_months = [
                 i for i in range(1, len(_portfolio_plot))
-                if _portfolio_plot[i - 1] > 0 and _portfolio_plot[i] / _portfolio_plot[i - 1] < 0.90
+                if _portfolio_plot[i - 1] > 0 and _portfolio_plot[i] / _portfolio_plot[i - 1] < 0.85
             ]
+
+            # ── 원금 누적 계산 ──────────────────────────────────────────────
+            _principal_plot = [current_capital + monthly_won * i for i in range(_actual_len)]
 
             # ── Plotly 차트 ────────────────────────────────────────────────
             fig = go.Figure()
+
+            # 원금 누적선 (가장 먼저 그려 다른 선 아래에 위치)
+            fig.add_trace(go.Scatter(
+                x=_x_vals,
+                y=_principal_plot,
+                mode="lines",
+                name="원금 누적",
+                line=dict(color="#F59E0B", width=2),
+                hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
+            ))
 
             # S&P500 기준선
             if len(_voo_plot) > 0:
@@ -4502,7 +4549,7 @@ def run_streamlit_app():
                     y=_voo_plot,
                     mode="lines",
                     name="S&P500 기준선 (VOO 대표 경로)",
-                    line=dict(color="#9CA3AF", width=1.5, dash="solid"),
+                    line=dict(color="#6EE7B7", width=2),
                     hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
                 ))
 
@@ -4516,7 +4563,7 @@ def run_streamlit_app():
                 hovertemplate="%{x|%Y-%m}<br>%{y:,.0f}원<extra></extra>",
             ))
 
-            _target_won_hline = int(st.session_state.get("target_amount", 0))
+            _target_won_hline = 0 if _s_mode == "목표 기간 확인" else int(st.session_state.get("target_amount", 0))
             if _target_won_hline > 0:
                 fig.add_hline(
                     y=_target_won_hline,
@@ -4566,9 +4613,9 @@ def run_streamlit_app():
                         ax=0,
                         ay=_pin_ay,
                         font=dict(size=20, color="#ef4444"),
-                        bgcolor="rgba(255,255,255,0.9)",
-                        bordercolor="#ef4444",
-                        borderwidth=1,
+                        bgcolor="rgba(0,0,0,0)",
+                        bordercolor="rgba(0,0,0,0)",
+                        borderwidth=0,
                         borderpad=2,
                     ))
 
@@ -4579,7 +4626,7 @@ def run_streamlit_app():
                 plot_bgcolor="#f8f9fa",
                 paper_bgcolor="white",
                 font=dict(family="Malgun Gothic", size=13),
-                margin=dict(l=80, r=40, t=_plot_margin_top, b=60),
+                margin=dict(l=80, r=110, t=_plot_margin_top, b=60),
                 hovermode="x unified",
                 legend=dict(
                     x=0.01,
@@ -4607,18 +4654,49 @@ def run_streamlit_app():
                 annotations=_annotations,
             )
             st.plotly_chart(fig, use_container_width=True)
-            if _target_met:
-                st.caption(
-                    f"표시된 파란 선은 Monte Carlo 100회 중 전월 대비 -10% 급락이 "
-                    f"{_target_crashes}회 이상 포함되고, 최종 자산이 중앙값에 가까운 대표 경로입니다."
-                )
-            else:
-                st.caption(
-                    f"표시된 파란 선은 Monte Carlo 100회 중 급락 횟수가 가장 많은 대표 경로입니다. "
-                    f"이번 결과에서는 목표 급락 횟수 {_target_crashes}회 중 {_selected_crashes}회가 감지되었습니다."
+
+            # ── 3. 급락 구간 설명 ─────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 급락 구간 설명")
+            _crash_info_rows = [
+                ("📌", "급락 구간: 전월 대비 15% 하락한 구간입니다."),
+                ("💡", "급락 시 여유자금이 있다면 추가 매수를 고려해 보세요."),
+            ]
+            if _s_mode == "목표 금액 달성":
+                if _target_months_stored is not None:
+                    _tm_date_label = (
+                        pd.Timestamp(start_date) + pd.DateOffset(months=int(_target_months_stored))
+                    ).strftime("%Y년 %m월")
+                    _calendar_text = (
+                        f"목표 달성 시점: {_tm_date_label} "
+                        f"(중앙값 기준 목표 금액을 3개월 연속 유지하는 첫 시점)"
+                    )
+                else:
+                    _period_end = _x_vals[-1] if _x_vals else pd.Timestamp(end_date)
+                    _calendar_text = (
+                        f"목표 달성 시점: 시뮬레이션 기간({_period_end.strftime('%Y년 %m월')}) 내 "
+                        f"중앙값 기준 목표 금액 3개월 연속 유지 미달성"
+                    )
+                _crash_info_rows.append(("📅", _calendar_text))
+            _crash_info_html = "".join(
+                f'<div style="display:flex;align-items:flex-start;gap:0.4rem;'
+                f'margin:{"0.35rem 0 0 0" if i else "0"};">'
+                f'<span style="flex-shrink:0;line-height:1.6;">{icon}</span>'
+                f'<span style="line-height:1.6;">{text}</span></div>'
+                for i, (icon, text) in enumerate(_crash_info_rows)
+            )
+            st.markdown(
+                f'<div style="padding:0.75rem 1rem;background-color:rgba(28,131,225,0.12);'
+                f'border-radius:0.5rem;line-height:1.6;">{_crash_info_html}</div>',
+                unsafe_allow_html=True,
+            )
+            if not _crash_months:
+                st.warning(
+                    "급락 구간 없음\n\n"
+                    "이번 대표 경로에서는 전월 대비 15% 이상 하락 구간이 발생하지 않았습니다."
                 )
 
-            # ── 3. Monte Carlo 불확실성 구간 (10~90% 밴드) ─────────────────
+            # ── 4. Monte Carlo 불확실성 구간 (10~90% 밴드) ─────────────────
             st.markdown("---")
             st.markdown("#### 📊 Monte Carlo 불확실성 구간")
 
@@ -4713,7 +4791,7 @@ def run_streamlit_app():
                     plot_bgcolor="#f8f9fa",
                     paper_bgcolor="white",
                     font=dict(family="Malgun Gothic", size=13),
-                    margin=dict(l=80, r=40, t=60, b=60),
+                    margin=dict(l=80, r=110, t=60, b=60),
                     hovermode="x unified",
                     legend=dict(
                         x=0.01,
@@ -4747,31 +4825,6 @@ def run_streamlit_app():
                 )
             else:
                 st.info("불확실성 구간을 표시할 시뮬레이션 데이터가 없습니다.")
-
-            # ── 급락 구간 설명 ─────────────────────────────────────────────
-            st.markdown("---")
-            st.markdown("#### 급락 구간 설명")
-            st.info(
-                "📌 급락 구간: 전월 대비 10% 하락한 구간입니다.\n\n"
-                "여유자금이 있다면 더 투입하세요."
-            )
-            if _crash_months:
-                _crash_lines = [
-                    f"- {_x_vals[m].strftime('%Y년 %m월')}: "
-                    f"{(_portfolio_plot[m] / _portfolio_plot[m - 1] - 1) * 100:.1f}%"
-                    for m in _crash_months
-                    if m < len(_x_vals)
-                ]
-                st.warning(
-                    "급락 구간이 감지되었습니다.\n\n"
-                    + "\n".join(_crash_lines)
-                )
-            else:
-                st.warning(
-                    "급락 구간 없음\n\n"
-                    "이번 시뮬레이션에서는 전월 대비 10% 이상 하락 구간이 발생하지 않았습니다.\n\n"
-                    "기준: 내 포트폴리오 대표 경로가 전월 대비 10% 이상 하락한 시점을 그래프에 표시합니다."
-                )
 
             # ── 세금 영향 분석 ─────────────────────────────────────────────
             st.markdown("---")
@@ -4853,37 +4906,41 @@ def run_streamlit_app():
             _div_after = int(round(_cumulative_div_pretax_won - _cumulative_div_tax_won))
             _final_holding = _stock_after + _div_after
 
-            st.markdown(
+            st.html(
                 f"""
-**목표 달성 시점:** {_goal_period_label} (환율 {_goal_exchange_rate:,.0f}원/달러)
-
-- 주식 자산 (세전): **{fmt_money(int(round(_stock_pretax)))}원**
-- 양도소득세 22% 차감: **-{fmt_money(_cg_tax)}원**
-- 주식 자산 (세후): **{fmt_money(_stock_after)}원**
-
-**배당금 (누적)**
-
-- 배당금 합계 (세전): **{fmt_money(_div_pretax)}원**
-- 배당소득세 15.4% 누적 차감: **-{fmt_money(_div_tax)}원**
-- 배당금 (세후): **{fmt_money(_div_after)}원**
-
-**최종 보유액**
-
-주식(세후) + 배당금(세후) = **{fmt_money(_final_holding)}원**
+<div style="font-family:'Malgun Gothic',sans-serif;max-width:680px;margin:0 auto;">
+  <p style="color:#6B7280;font-size:0.82rem;margin:0 0 12px 2px;letter-spacing:0.02em;">
+    목표 달성: {_goal_period_label} &nbsp;·&nbsp; 환율 {_goal_exchange_rate:,.0f}원/달러
+  </p>
+  <div style="background:linear-gradient(135deg,#1D4ED8 0%,#2563EB 100%);border-radius:16px;padding:28px 32px;text-align:center;margin-bottom:14px;box-shadow:0 4px 18px rgba(37,99,235,0.25);">
+    <div style="color:rgba(255,255,255,0.75);font-size:0.85rem;letter-spacing:0.08em;margin-bottom:6px;">최종 보유액 (세후 주식 + 세후 배당)</div>
+    <div style="color:#FFFFFF;font-size:2.15rem;font-weight:700;line-height:1.15;">{fmt_money(_final_holding)}원</div>
+  </div>
+  <div style="display:flex;gap:12px;margin-bottom:14px;">
+    <div style="flex:1;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:12px;padding:18px 20px;">
+      <div style="color:#1D4ED8;font-size:0.78rem;font-weight:600;letter-spacing:0.06em;margin-bottom:8px;">📈 주식 자산</div>
+      <div style="color:#6B7280;font-size:0.8rem;text-decoration:line-through;margin-bottom:4px;">세전 {fmt_money(int(round(_stock_pretax)))}원</div>
+      <div style="color:#1E3A8A;font-size:1.35rem;font-weight:700;margin-bottom:8px;">{fmt_money(_stock_after)}원</div>
+      <div style="color:#EF4444;font-size:0.75rem;background:#FEE2E2;border-radius:6px;padding:3px 8px;display:inline-block;">양도소득세 22% -{fmt_money(_cg_tax)}원</div>
+    </div>
+    <div style="flex:1;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:18px 20px;">
+      <div style="color:#15803D;font-size:0.78rem;font-weight:600;letter-spacing:0.06em;margin-bottom:8px;">💰 배당금 누적</div>
+      <div style="color:#6B7280;font-size:0.8rem;text-decoration:line-through;margin-bottom:4px;">세전 {fmt_money(_div_pretax)}원</div>
+      <div style="color:#14532D;font-size:1.35rem;font-weight:700;margin-bottom:8px;">{fmt_money(_div_after)}원</div>
+      <div style="color:#EF4444;font-size:0.75rem;background:#FEE2E2;border-radius:6px;padding:3px 8px;display:inline-block;">배당소득세 15.4% -{fmt_money(_div_tax)}원</div>
+    </div>
+  </div>
+  <p style="color:#9CA3AF;font-size:0.75rem;line-height:1.6;margin:0 2px;">
+    양도소득세는 투입 원금 대비 이익분에 22%를 적용했고, 배당소득세는 매월 배당 수령 시 15.4%를 누적 반영했습니다.
+    환율은 시뮬레이션 시작 환율과 월별 환율 변동 기댓값을 복리 적용한 추정치입니다.
+  </p>
+</div>
                 """
-            )
-            st.caption(
-                "양도소득세는 투입 원금 대비 이익분에 22%를 적용했고, "
-                "배당소득세는 매월 배당 수령 시 15.4%를 누적 반영했습니다. "
-                "환율은 시뮬레이션 시작 환율과 월별 환율 변동 기댓값을 복리 적용한 추정치입니다."
             )
 
         cols = st.columns([2, 2, 1])
-        nav_cols = cols[0].columns(2)
-        if nav_cols[0].button("이전", key="prev_6"):
+        if cols[0].button("이전", key="prev_6"):
             move_step(4)
-        if nav_cols[1].button("처음으로", key="home_6"):
-            reset_app_to_start()
 
 
 if __name__ == "__main__":
