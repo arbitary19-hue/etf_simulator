@@ -571,6 +571,11 @@ def _extract_json_object(text):
     return json.loads(cleaned[start:end + 1])
 
 
+def _is_gemini_available():
+    """모델 인스턴스 생성 없이 Gemini 사용 가능 여부만 빠르게 확인합니다."""
+    return genai is not None and bool(os.getenv("GEMINI_API_KEY"))
+
+
 def _get_gemini_model():
     api_key = os.getenv("GEMINI_API_KEY")
     if genai is None or not api_key:
@@ -805,6 +810,7 @@ def _funding_situation_to_q8(funding):
 
 def _activate_fixed_profile_fallback():
     st.session_state["profile_ai_fallback"] = True
+    st.session_state["profile_ai_fallback_forced"] = False
     st.session_state["current_question"] = "Q1"
     st.session_state["profile_responses"] = {}
     st.session_state["gemini_profile_questions"] = []
@@ -2944,8 +2950,173 @@ def _set_app_step(new_step, *, scroll_to_top=True):
 
 
 def run_streamlit_app():
-    st.set_page_config(page_title="ETF 포트폴리오 시뮬레이션", layout="wide")
-    st.title("ETF 포트폴리오 시뮬레이션")
+    st.set_page_config(
+        page_title="ETF 포트폴리오 시뮬레이션",
+        page_icon="📈",
+        layout="wide",
+    )
+
+    st.markdown("""
+<style>
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+/* ── 기본 폰트 & 배경 ── */
+html, body, [class*="css"] {
+    font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif !important;
+}
+
+/* ── 메인 컨테이너 ── */
+.main .block-container {
+    padding-top: 1.8rem;
+    padding-bottom: 3rem;
+    max-width: 1100px;
+}
+
+/* ── 페이지 타이틀 ── */
+h1 {
+    font-size: 1.7rem !important;
+    font-weight: 800 !important;
+    color: #0a1628 !important;
+    letter-spacing: -0.5px;
+    padding-bottom: 0.3rem;
+    border-bottom: 3px solid #c9a84c;
+    margin-bottom: 1.2rem !important;
+    display: inline-block;
+}
+
+/* ── h2 / h3 소제목 ── */
+h2 { font-size: 1.25rem !important; font-weight: 700 !important; color: #0a1628 !important; }
+h3 { font-size: 1.05rem !important; font-weight: 700 !important; color: #1a2332 !important; }
+h4 {
+    font-size: 1.15rem !important;
+    font-weight: 700 !important;
+    color: #0a1628 !important;
+    margin-top: 1.2rem !important;
+    margin-bottom: 0.5rem !important;
+    letter-spacing: -0.3px;
+}
+
+/* ── 버튼 공통 ── */
+.stButton > button {
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    padding: 0.45rem 1rem !important;
+    border: 1.5px solid #2c4a7c !important;
+    background: #2c4a7c !important;
+    color: #ffffff !important;
+    transition: all 0.18s ease !important;
+    box-shadow: 0 1px 4px rgba(44,74,124,0.15) !important;
+}
+.stButton > button:hover {
+    background: #1e3560 !important;
+    border-color: #c9a84c !important;
+    box-shadow: 0 3px 10px rgba(201,168,76,0.30) !important;
+    transform: translateY(-1px) !important;
+}
+.stButton > button:active {
+    transform: translateY(0px) !important;
+    box-shadow: none !important;
+}
+
+/* ── 카드/컨테이너 (border=True) ── */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 10px !important;
+    border: 1px solid #e2e6ed !important;
+    box-shadow: 0 2px 8px rgba(10,22,40,0.07) !important;
+    background: #ffffff !important;
+}
+
+/* ── 입력 필드 ── */
+.stTextInput > div > div > input,
+.stNumberInput > div > div > input {
+    border-radius: 6px !important;
+    border: 1.5px solid #d0d5de !important;
+    font-size: 0.92rem !important;
+    transition: border-color 0.15s !important;
+}
+.stTextInput > div > div > input:focus,
+.stNumberInput > div > div > input:focus {
+    border-color: #c9a84c !important;
+    box-shadow: 0 0 0 3px rgba(201,168,76,0.15) !important;
+}
+
+/* ── 셀렉트박스 ── */
+.stSelectbox > div > div {
+    border-radius: 6px !important;
+    border: 1.5px solid #d0d5de !important;
+}
+
+/* ── 슬라이더 ── */
+.stSlider > div > div > div > div {
+    background: #c9a84c !important;
+}
+
+/* ── 프로그레스 바 ── */
+.stProgress > div > div > div > div {
+    background: linear-gradient(90deg, #0a1628 0%, #c9a84c 100%) !important;
+    border-radius: 4px !important;
+}
+.stProgress > div > div > div {
+    background: #e2e6ed !important;
+    border-radius: 4px !important;
+}
+
+/* ── 메트릭 카드 ── */
+[data-testid="stMetric"] {
+    background: #ffffff !important;
+    border: 1px solid #e2e6ed !important;
+    border-left: 4px solid #c9a84c !important;
+    border-radius: 8px !important;
+    padding: 1rem 1.2rem !important;
+    box-shadow: 0 1px 4px rgba(10,22,40,0.07) !important;
+}
+[data-testid="stMetricLabel"] { color: #64748b !important; font-size: 0.82rem !important; font-weight: 600 !important; }
+[data-testid="stMetricValue"] {
+    color: #0a1628 !important;
+    font-weight: 800 !important;
+    font-size: clamp(0.95rem, 2vw, 1.6rem) !important;
+    word-break: break-all !important;
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
+    line-height: 1.25 !important;
+}
+[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
+
+/* ── 데이터프레임 ── */
+[data-testid="stDataFrame"] {
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    border: 1px solid #e2e6ed !important;
+}
+
+/* ── expander ── */
+.streamlit-expanderHeader {
+    background: #f8f9fc !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    color: #0a1628 !important;
+    border: 1px solid #e2e6ed !important;
+}
+
+/* ── info / warning / success 박스 ── */
+[data-testid="stAlert"] {
+    border-radius: 8px !important;
+    border-left-width: 4px !important;
+}
+
+/* ── 구분선 ── */
+hr { border-color: #e2e6ed !important; margin: 1.5rem 0 !important; }
+
+/* ── 사이드바 (사용 시) ── */
+[data-testid="stSidebar"] {
+    background: #0a1628 !important;
+}
+[data-testid="stSidebar"] * { color: #e8eeff !important; }
+</style>
+""", unsafe_allow_html=True)
+
+    st.title("📈 ETF 포트폴리오 시뮬레이션")
     load_etf_cagr()
 
     # 유틸: 금액 콤마 포맷 및 파서 (천단위 콤마, 소수 .00 제거)
@@ -3180,7 +3351,12 @@ def run_streamlit_app():
         st.write("쉬운 질문에 답하면 투자 성향에 맞는 상품 유형을 추천해 드립니다. (종목 코드는 결과 화면에서 확인할 수 있습니다.)")
 
         responses = st.session_state.get("profile_responses", {})
-        if st.session_state.get("profile_ai_fallback", False) and _get_gemini_model() is not None and not responses:
+        if (
+            st.session_state.get("profile_ai_fallback", False)
+            and not st.session_state.get("profile_ai_fallback_forced", False)
+            and _is_gemini_available()
+            and not responses
+        ):
             st.session_state["profile_ai_fallback"] = False
             st.session_state["current_question"] = "G1"
             st.session_state["gemini_profile_questions"] = []
@@ -3222,6 +3398,12 @@ def run_streamlit_app():
             st.write(f"진행 상황: {len(responses)}/{GEMINI_MIN_PROFILE_QUESTIONS} (최대 {GEMINI_MAX_PROFILE_QUESTIONS}문항)")
             _render_profile_keyword_explanations([q_data["question"], *q_choices], current_q)
 
+            # sub_state를 먼저 가져와야 메인 라디오의 disabled 여부를 결정할 수 있다
+            subquestions = st.session_state.setdefault("gemini_profile_subquestions", {})
+            sub_state = subquestions.get(current_q)
+            # 추가질문이 1개라도 생성되어 있으면 메인질문은 수정 불가
+            main_locked = sub_state is not None and len(sub_state.get("items", [])) > 0
+
             selected_index = st.radio(
                 "선택지",
                 range(len(q_choices)),
@@ -3229,15 +3411,19 @@ def run_streamlit_app():
                 index=responses.get(current_q) if current_q in responses else None,
                 key=f"choice_{current_q}",
                 label_visibility="collapsed",
+                disabled=main_locked,
             )
 
-            subquestions = st.session_state.setdefault("gemini_profile_subquestions", {})
-            sub_state = subquestions.get(current_q)
             sub_complete = selected_index is not None
 
             if selected_index is not None:
                 previous_answer = st.session_state["profile_responses"].get(current_q)
                 if previous_answer != selected_index:
+                    # 이전 추가질문 위젯의 stale 상태를 제거해야
+                    # 새 추가질문이 자동 답변되는 버그를 막을 수 있다
+                    old_sub_state = subquestions.get(current_q, {})
+                    for i in range(len(old_sub_state.get("items", []))):
+                        st.session_state.pop(f"sub_choice_{current_q}_{i}", None)
                     st.session_state["profile_responses"][current_q] = selected_index
                     sub_state = {
                         "main_answer": selected_index,
@@ -3256,11 +3442,15 @@ def run_streamlit_app():
                     sub_state["items"] = []
                     sub_state["complete"] = True
 
-                if can_have_subquestions and not sub_state.get("complete", False):
+                if can_have_subquestions:
                     items = sub_state.setdefault("items", [])
+                    # 추가질문은 complete 여부와 무관하게 항상 렌더링
+                    # (complete=True 후에도 답변 변경 가능하도록)
                     for sub_idx, sub_data in enumerate(items):
                         st.write(f"↳ **추가 질문 {sub_idx + 1}. {sub_data['question']}**")
                         saved_answer = sub_data.get("answer")
+                        # 뒤에 추가질문이 더 있으면 이 질문은 수정 불가
+                        sub_locked = sub_idx < len(items) - 1
                         sub_selected = st.radio(
                             "하위 선택지",
                             range(len(sub_data["choices"])),
@@ -3268,68 +3458,60 @@ def run_streamlit_app():
                             index=saved_answer if saved_answer is not None else None,
                             key=f"sub_choice_{current_q}_{sub_idx}",
                             label_visibility="collapsed",
+                            disabled=sub_locked,
                         )
                         if sub_selected is not None and sub_data.get("answer") != sub_selected:
                             sub_data["answer"] = sub_selected
                             subquestions[current_q] = sub_state
                             st.rerun()
 
-                    all_sub_answered = all(item.get("answer") is not None for item in items)
-                    if all_sub_answered:
-                        if len(items) >= GEMINI_MAX_SUBQUESTIONS_PER_MAIN:
-                            sub_state["complete"] = True
-                        else:
-                            answers = _profile_answers_for_gemini(
-                                st.session_state["profile_responses"],
-                                gemini_questions,
-                                subquestions,
-                            )
-                            sub_answers = []
-                            for item in items:
-                                answer_idx = item.get("answer")
-                                sub_answers.append({
-                                    "question": item.get("question", ""),
-                                    "answer": item["choices"][answer_idx],
-                                })
-                            try:
-                                with st.spinner("추가 확인이 필요한지 확인 중입니다..."):
-                                    next_sub = _generate_gemini_profile_subquestion(
-                                        answers,
-                                        main_question_number,
-                                        q_data["question"],
-                                        q_choices[selected_index],
-                                        sub_answers,
-                                    )
-                                if next_sub.get("needs_sub_question"):
-                                    items.append({
-                                        "question": next_sub["question"],
-                                        "choices": next_sub["choices"],
+                    # 새 추가질문 생성은 아직 complete가 아닐 때만 수행
+                    if not sub_state.get("complete", False):
+                        all_sub_answered = all(item.get("answer") is not None for item in items)
+                        if all_sub_answered:
+                            if len(items) >= GEMINI_MAX_SUBQUESTIONS_PER_MAIN:
+                                sub_state["complete"] = True
+                            else:
+                                answers = _profile_answers_for_gemini(
+                                    st.session_state["profile_responses"],
+                                    gemini_questions,
+                                    subquestions,
+                                )
+                                sub_answers = []
+                                for item in items:
+                                    answer_idx = item.get("answer")
+                                    sub_answers.append({
+                                        "question": item.get("question", ""),
+                                        "answer": item["choices"][answer_idx],
                                     })
-                                    subquestions[current_q] = sub_state
+                                try:
+                                    with st.spinner("추가 확인이 필요한지 확인 중입니다..."):
+                                        next_sub = _generate_gemini_profile_subquestion(
+                                            answers,
+                                            main_question_number,
+                                            q_data["question"],
+                                            q_choices[selected_index],
+                                            sub_answers,
+                                        )
+                                    if next_sub.get("needs_sub_question"):
+                                        items.append({
+                                            "question": next_sub["question"],
+                                            "choices": next_sub["choices"],
+                                        })
+                                        subquestions[current_q] = sub_state
+                                        st.rerun()
+                                    else:
+                                        sub_state["complete"] = True
+                                except Exception as exc:
+                                    _activate_fixed_profile_fallback()
+                                    st.warning(f"Gemini 하위 질문 생성에 실패해 기존 고정 질문으로 진행합니다. ({type(exc).__name__}: {exc})")
                                     st.rerun()
-                                else:
-                                    sub_state["complete"] = True
-                            except Exception as exc:
-                                _activate_fixed_profile_fallback()
-                                st.warning(f"Gemini 하위 질문 생성에 실패해 기존 고정 질문으로 진행합니다. ({type(exc).__name__}: {exc})")
-                                st.rerun()
 
                 sub_complete = bool(sub_state.get("complete", False)) and all(
                     item.get("answer") is not None for item in sub_state.get("items", [])
                 )
 
             cols = st.columns([2, 2, 1])
-            nav_cols = cols[0].columns(2)
-            if nav_cols[0].button("이전", key="q_prev"):
-                if current_q in st.session_state["profile_responses"]:
-                    del st.session_state["profile_responses"][current_q]
-                st.session_state.setdefault("gemini_profile_subquestions", {}).pop(current_q, None)
-                if current_idx > 0:
-                    st.session_state["current_question"] = f"G{current_idx}"
-                    st.rerun()
-            if nav_cols[1].button("처음으로", key="q_home"):
-                reset_app_to_start()
-
             with cols[2]:
                 if st.button("다음", key="q_next", disabled=not sub_complete):
                     st.session_state["profile_responses"][current_q] = selected_index
@@ -3460,21 +3642,6 @@ def run_streamlit_app():
                     )
 
                 cols = st.columns([2, 2, 1])
-                nav_cols = cols[0].columns(2)
-                if nav_cols[0].button("이전", key="q_prev"):
-                    if current_q in st.session_state["profile_responses"]:
-                        del st.session_state["profile_responses"][current_q]
-                    question_order = get_profile_question_order(st.session_state["profile_responses"])
-                    try:
-                        current_idx = question_order.index(current_q)
-                        if current_idx > 0:
-                            st.session_state["current_question"] = question_order[current_idx - 1]
-                            st.rerun()
-                    except ValueError:
-                        pass
-                if nav_cols[1].button("처음으로", key="q_home"):
-                    reset_app_to_start()
-
                 with cols[2]:
                     if st.button("다음", key="q_next"):
                         if is_multi:
@@ -3497,8 +3664,15 @@ def run_streamlit_app():
                             st.rerun()
 
         st.markdown("---")
-        if st.button("관리자모드", key="admin_mode_step1"):
-            activate_admin_mode()
+        _dev_cols = st.columns(2)
+        with _dev_cols[0]:
+            if st.button("관리자모드", key="admin_mode_step1"):
+                activate_admin_mode()
+        with _dev_cols[1]:
+            if st.button("🔧 고정질문 모드 테스트", key="force_fallback_step1"):
+                _activate_fixed_profile_fallback()
+                st.session_state["profile_ai_fallback_forced"] = True
+                st.rerun()
 
     elif current_step == 2:
         if not profile_weights:
@@ -3790,8 +3964,6 @@ def run_streamlit_app():
                 st.metric("포트폴리오 예상 연 수익률", f"{_annual_return_pct:.1f}%")
             else:
                 st.metric("포트폴리오 예상 연 수익률", "산출 불가")
-        if _annual_return_source:
-            st.caption(f"수익률 기준: {_annual_return_source} CAGR 가중평균")
 
         st.write(f"**분석 모드:** {selected_mode}")
 
@@ -3808,7 +3980,6 @@ def run_streamlit_app():
                 _tm = int(target_months_stored)
                 dividend_report_months = _tm
                 st.write(f"• **예상 달성 기간:** {_tm // 12}년 {_tm % 12}개월")
-                st.write(f"• **목표 달성 확률:** {achievement_prob:.1f}%")
 
         elif selected_mode == "목표 기간 확인":
             dividend_report_months = max(0, len(median_path) - 1)
@@ -3822,7 +3993,6 @@ def run_streamlit_app():
                     _amt = f"{_eok}억원"
                 else:
                     _amt = f"{_man:,}만원"
-                st.write(f"• **예상 달성 금액:** {_amt}")
                 if target_won > 0 and _final_median_val >= target_won:
                     st.success("✅ 중앙값 기준으로 목표 금액 달성이 가능합니다.")
 
@@ -3926,56 +4096,49 @@ def run_streamlit_app():
         st.markdown("---")
 
         # ===== 섹션 5: AI 성향 분석 결과 =====
-        st.markdown("### 💡 5. AI 성향 분석 결과")
+        if _is_gemini_available():
+            st.markdown("### 💡 5. AI 성향 분석 결과")
 
-        _investment_method = _recommended_investment_mode_from_profile().replace("형", "식")
-        _analysis_years = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
-        _etfs_for_prompt = [
-            {"ETF": t, "비중": f"{portfolio_weights.get(t, 0) * 100:.1f}%"}
-            for t in selected_etfs
-        ]
+            _investment_method = _recommended_investment_mode_from_profile().replace("형", "식")
+            _analysis_years = float(st.session_state.get("years", st.session_state.get("target_years", 10)))
+            _etfs_for_prompt = [
+                {"ETF": t, "비중": f"{portfolio_weights.get(t, 0) * 100:.1f}%"}
+                for t in selected_etfs
+            ]
 
-        # session_state 캐시 — 입력이 바뀌지 않으면 Gemini를 재호출하지 않음
-        _ai_cache_key = str((
-            sorted(profile_weights.items()),
-            sorted(portfolio_weights.items()),
-            _investment_method,
-            target_won,
-            int(_analysis_years),
-            selected_mode,
-        ))
-        _cached = st.session_state.get("step4_ai_analysis")
-        _cached_key = st.session_state.get("step4_ai_cache_key")
+            # session_state 캐시 — 입력이 바뀌지 않으면 Gemini를 재호출하지 않음
+            _ai_cache_key = str((
+                sorted(profile_weights.items()),
+                sorted(portfolio_weights.items()),
+                _investment_method,
+                target_won,
+                int(_analysis_years),
+                selected_mode,
+            ))
+            _cached = st.session_state.get("step4_ai_analysis")
+            _cached_key = st.session_state.get("step4_ai_cache_key")
 
-        if _cached is None or _cached_key != _ai_cache_key:
-            try:
-                with st.spinner("AI 분석 중입니다. 잠시만 기다려 주세요..."):
-                    _ai_text = _generate_gemini_step4_analysis(
-                        profile_weights,
-                        _etfs_for_prompt,
-                        _investment_method,
-                        target_won,
-                        _analysis_years,
-                    )
-            except Exception:
-                _ai_text = _default_step4_analysis_text(
-                    profile_weights,
-                    selected_etfs,
-                    _investment_method,
-                    target_won,
-                    _analysis_years,
-                )
-            st.session_state["step4_ai_analysis"] = _ai_text
-            st.session_state["step4_ai_cache_key"] = _ai_cache_key
-        else:
-            _ai_text = _cached
+            if _cached is None or _cached_key != _ai_cache_key:
+                try:
+                    with st.spinner("AI 분석 중입니다. 잠시만 기다려 주세요..."):
+                        _ai_text = _generate_gemini_step4_analysis(
+                            profile_weights,
+                            _etfs_for_prompt,
+                            _investment_method,
+                            target_won,
+                            _analysis_years,
+                        )
+                    st.session_state["step4_ai_analysis"] = _ai_text
+                    st.session_state["step4_ai_cache_key"] = _ai_cache_key
+                except Exception:
+                    _ai_text = None
+                    st.session_state["step4_ai_analysis"] = None
+                    st.session_state["step4_ai_cache_key"] = _ai_cache_key
+            else:
+                _ai_text = _cached
 
-        st.info(_ai_text)
-
-        if st.button("🔄 AI 분석 다시 생성", key="regen_ai_step4"):
-            st.session_state.pop("step4_ai_analysis", None)
-            st.session_state.pop("step4_ai_cache_key", None)
-            st.rerun()
+            if _ai_text:
+                st.info(_ai_text)
 
         st.markdown("---")
 
@@ -4320,7 +4483,6 @@ def run_streamlit_app():
                         ">
                             <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">📅 예상 달성 기간</div>
                             <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{years_calc}년 {months_remain}개월</div>
-                            <div style="font-size:0.9rem;opacity:0.85;">Monte Carlo 100회 중앙값 기준 · 달성 확률 {achievement_prob:.1f}%</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
@@ -4350,7 +4512,6 @@ def run_streamlit_app():
                         ">
                             <div style="font-size:0.95rem;opacity:0.9;margin-bottom:10px;font-weight:600;">예상 달성 금액</div>
                             <div style="font-size:2.2rem;font-weight:800;margin-bottom:6px;">{_amount_str}</div>
-                            <div style="font-size:0.9rem;opacity:0.85;">Monte Carlo 100회 중앙값 기준 · 달성 확률 {achievement_prob:.1f}%</div>
                         </div>
                         """,
                         unsafe_allow_html=True,
@@ -4851,7 +5012,8 @@ def run_streamlit_app():
             _stock_pretax = float(_portfolio_plot[_goal_month])
             _total_invested = current_capital + monthly_won * _goal_month
             _capital_gain = max(0.0, _stock_pretax - _total_invested)
-            _cg_tax = int(round(_capital_gain * _CAPITAL_GAINS_TAX_RATE))
+            _BASIC_DEDUCTION = 2_500_000  # 해외주식 양도소득세 연간 기본공제
+            _cg_tax = int(round(max(0.0, _capital_gain - _BASIC_DEDUCTION) * _CAPITAL_GAINS_TAX_RATE))
             _stock_after = int(round(_stock_pretax - _cg_tax))
 
             _step5_selected_etfs = st.session_state.get("selected_etfs", [])
@@ -4921,7 +5083,7 @@ def run_streamlit_app():
       <div style="color:#1D4ED8;font-size:0.78rem;font-weight:600;letter-spacing:0.06em;margin-bottom:8px;">📈 주식 자산</div>
       <div style="color:#6B7280;font-size:0.8rem;text-decoration:line-through;margin-bottom:4px;">세전 {fmt_money(int(round(_stock_pretax)))}원</div>
       <div style="color:#1E3A8A;font-size:1.35rem;font-weight:700;margin-bottom:8px;">{fmt_money(_stock_after)}원</div>
-      <div style="color:#EF4444;font-size:0.75rem;background:#FEE2E2;border-radius:6px;padding:3px 8px;display:inline-block;">양도소득세 22% -{fmt_money(_cg_tax)}원</div>
+      <div style="color:#EF4444;font-size:0.75rem;background:#FEE2E2;border-radius:6px;padding:3px 8px;display:inline-block;">양도소득세 22% (기본공제 250만원 적용) -{fmt_money(_cg_tax)}원</div>
     </div>
     <div style="flex:1;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:18px 20px;">
       <div style="color:#15803D;font-size:0.78rem;font-weight:600;letter-spacing:0.06em;margin-bottom:8px;">💰 배당금 누적</div>
@@ -4931,16 +5093,13 @@ def run_streamlit_app():
     </div>
   </div>
   <p style="color:#9CA3AF;font-size:0.75rem;line-height:1.6;margin:0 2px;">
-    양도소득세는 투입 원금 대비 이익분에 22%를 적용했고, 배당소득세는 매월 배당 수령 시 15.4%를 누적 반영했습니다.
+    양도소득세는 투입 원금 대비 이익분에서 연간 기본공제 250만원을 차감한 후 22%를 적용했고, 배당소득세는 개인 소득 상황에 따라 실제 세율이 달라질 수 있으나 15.4%로 일괄 적용했습니다. 참고용으로만 활용하시기 바랍니다.
     환율은 시뮬레이션 시작 환율과 월별 환율 변동 기댓값을 복리 적용한 추정치입니다.
   </p>
 </div>
                 """
             )
 
-        cols = st.columns([2, 2, 1])
-        if cols[0].button("이전", key="prev_6"):
-            move_step(4)
 
 
 if __name__ == "__main__":
