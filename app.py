@@ -5100,6 +5100,71 @@ hr { border-color: #e2e6ed !important; margin: 1.5rem 0 !important; }
                 """
             )
 
+            # ── 최종 자산 비교 막대 그래프 ──────────────────────────────────────
+            _voo_final = float(_voo_plot[-1]) if len(_voo_plot) > 0 else 0.0
+            _bar_labels = ["누적 원금", "내 포트폴리오", "S&P 500 (VOO)"]
+            _bar_values = [float(_total_invested), float(_stock_after), _voo_final]
+            _bar_colors = ["#9CA3AF", "#2563EB", "#F59E0B"]
+
+            def _fmt_bar_text(v):
+                if v >= 1e8:
+                    return f"{v/1e8:.2f}억원"
+                elif v >= 1e4:
+                    return f"{v/1e4:.0f}만원"
+                return f"{v:,.0f}원"
+
+            _bar_texts = []
+            for i, v in enumerate(_bar_values):
+                label = _fmt_bar_text(v)
+                if i > 0 and _total_invested > 0:
+                    ratio = v / _total_invested
+                    label += f"<br><b>원금 대비 {ratio:.2f}배</b>"
+                _bar_texts.append(label)
+
+            fig_compare = go.Figure(go.Bar(
+                x=_bar_labels,
+                y=_bar_values,
+                marker_color=_bar_colors,
+                marker_line=dict(color="white", width=0),
+                text=_bar_texts,
+                textposition="outside",
+                textfont=dict(size=13, color="#111827"),
+                width=0.38,
+            ))
+
+            _bar_max = max(_bar_values) if _bar_values else 1e8
+            _bar_y_top = _bar_max * 1.25
+            _bar_tick_step = max(1, round(_bar_y_top / 5 / 1e8)) * 1e8
+            _bar_tick_values = [
+                i * _bar_tick_step
+                for i in range(int(_bar_y_top / _bar_tick_step) + 2)
+            ]
+            _bar_tick_text = [f"{v / 1e8:.1f}억" for v in _bar_tick_values]
+
+            fig_compare.update_layout(
+                title=dict(
+                    text="최종 자산 비교 — 원금 · 내 포트폴리오 · S&P 500",
+                    font=dict(size=16, color="#111827"),
+                    x=0.5,
+                    xanchor="center",
+                ),
+                showlegend=False,
+                bargap=0.45,
+                yaxis=dict(
+                    title="금액",
+                    tickvals=_bar_tick_values,
+                    ticktext=_bar_tick_text,
+                    gridcolor="#F3F4F6",
+                    zeroline=False,
+                    range=[0, _bar_y_top],
+                ),
+                xaxis=dict(tickfont=dict(size=14, color="#111827")),
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF",
+                margin=dict(l=60, r=60, t=70, b=40),
+                height=420,
+            )
+            st.plotly_chart(fig_compare, use_container_width=True)
 
 
 if __name__ == "__main__":
